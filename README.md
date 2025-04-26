@@ -52,7 +52,7 @@ The script authenticates with the SBAT API using your credentials. It then enter
 
 ---
 
-## Nederlands (Dutch)
+## Nederlands
 
 ### Beschrijving
 Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api.rijbewijs.sbat.be`) voor beschikbare tijdsloten voor het praktijkexamen rijbewijs Type B (auto) in de regio Oost-Vlaanderen, België. Het monitort specifieke examencentra en geeft de gebruiker een melding via een systeembericht of consolebericht wanneer er nieuwe data beschikbaar komen.
