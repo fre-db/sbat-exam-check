@@ -3,14 +3,7 @@
 ## English
 
 ### Description
-This Python script automatically checks the SBAT practical driving exam booking system (`api.rijbewijs.sbat.be`) for available slots for the Type B (car) practical exam in the East Flanders region of Belgium. It monitors specific exam centers and notifies the user via a system dialog or console message when new dates become available.
-
-### Features
-* Checks for available Type B (E2) practical exam slots periodically, starting from the next day.
-* Monitors the following exam centers in East Flanders: Brakel, Sint-Niklaas, St-Denijs, Erembodegem, Eeklo.
-* Prompts the user to enter credentials if the configuration file or credentials are missing, and saves them.
-* Displays a system notification when new, previously unseen dates are found.
-
+This Python script periodically checks the SBAT practical driving exam booking system (`api.rijbewijs.sbat.be`) for available slots for the Type B (car) practical exam in the East Flanders region of Belgium. It monitors specific exam centers and notifies the user via a system dialog and console message when new dates become available.
 
 ### Releases / Pre-compiled Versions
 For users who prefer not to install Python or manage dependencies, pre-compiled versions for macOS and Windows are available.
@@ -42,9 +35,6 @@ For users who prefer not to install Python or manage dependencies, pre-compiled 
     password = YOUR_SBAT_PASSWORD
     ```
 
-### How it Works
-The script authenticates with the SBAT API using your credentials. It then enters an infinite loop, periodically sending requests to the API for each specified exam center to check for available slots. It compares the found slots with those seen in the previous check. If new dates are detected, it triggers a system notification. The check frequency increases during times when new slots are typically released.
-
 ### Disclaimer
 * This script relies on an unofficial API endpoint (`api.rijbewijs.sbat.be`) used by the SBAT booking system. This API may change without notice, which could break the script.
 * Use this script responsibly and ensure compliance with the SBAT website's terms of service.
@@ -55,15 +45,7 @@ The script authenticates with the SBAT API using your credentials. It then enter
 ## Nederlands
 
 ### Beschrijving
-Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api.rijbewijs.sbat.be`) voor beschikbare tijdsloten voor het praktijkexamen rijbewijs Type B (auto) in de regio Oost-Vlaanderen, België. Het monitort specifieke examencentra en geeft de gebruiker een melding via een systeembericht of consolebericht wanneer er nieuwe data beschikbaar komen.
-
-### Functies
-* Controleert periodiek op beschikbare praktijkexamen-slots voor Type B (E2) vanaf de volgende dag.
-* Monitort de volgende examencentra in Oost-Vlaanderen: Brakel, Sint-Niklaas, St-Denijs, Erembodegem, Eeklo.
-* Gebruikt inloggegevens uit een `config.ini`-bestand voor authenticatie.
-* Vraagt de gebruiker om inloggegevens in te voeren als het configuratiebestand of de gegevens ontbreken, en slaat deze op.
-* Toont een dialoog wanneer nieuwe, nog niet eerder geziene data worden gevonden.
-
+Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api.rijbewijs.sbat.be`) voor beschikbare tijdsloten voor het praktijkexamen rijbewijs Type B (auto) in de regio Oost-Vlaanderen, België. Het monitort periodiek specifieke examencentra en geeft de gebruiker een melding via een systeembericht en consolebericht wanneer er nieuwe data beschikbaar komen.
 
 ### Releases / Gecompileerde Versies
 Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn voorgecompileerde versies voor macOS en Windows beschikbaar.
@@ -94,9 +76,6 @@ Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn
     username = UW_SBAT_GEBRUIKERSNAAM
     password = UW_SBAT_WACHTWOORD
     ```
-
-### Hoe het Werkt
-Het script authenticeert bij de SBAT API met uw inloggegevens. Vervolgens gaat het een oneindige lus in, waarbij het periodiek verzoeken naar de API stuurt voor elk opgegeven examencentrum om te controleren op beschikbare slots. Het vergelijkt de gevonden slots met die van de vorige controle. Als er nieuwe data worden gedetecteerd, activeert het een systeemmelding. De controlefrequentie neemt toe tijdens de uren waarop doorgaans nieuwe slots worden vrijgegeven.
 
 ### Disclaimer
 * Dit script maakt gebruik van een onofficieel API-eindpunt (`api.rijbewijs.sbat.be`) dat wordt gebruikt door het SBAT-boekingssysteem. Deze API kan zonder kennisgeving wijzigen, wat het script onbruikbaar kan maken.
