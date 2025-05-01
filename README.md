@@ -18,11 +18,13 @@ For users who prefer not to install Python or manage dependencies, pre-compiled 
 4.  **Operation:** The application will run in the background (likely opening a terminal/console window on Windows, or just running without a visible window after the initial permission on macOS). It will display system notifications when new exam slots are found. To stop it, close the terminal/console window or use the Activity Monitor (macOS) / Task Manager (Windows) to end the process.
 
 ### Script usage
-1.  Ensure you have Python and the required libraries installed (`pip install requests pytz`).
-2.  Place the `sbat.py` script in a directory.
-3.  Run the script from your terminal: `python sbat.py`
-4.  If `config.ini` is not set up, follow the prompts to enter your credentials.
-5.  The script will run continuously in the background, checking for available slots and displaying notifications when new ones are found.
+1.  Ensure you have Python and the required libraries installed (`pip install requirements.txt`).
+2. Run one of the scripts from your terminal:
+   * `python sbat.py`
+   * `python sbat_gui_pyside.py` (MacOS/Windows)
+   * `python sbat_gui_gtk.py` (Linux)
+3. If `config.ini` is not set up, follow the prompts to enter your credentials.
+4. The script will run continuously in the background, checking for available slots and displaying notifications when new ones are found.
 
 
 ### Configuration
@@ -60,11 +62,13 @@ Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn
 4.  **Werking:** De applicatie draait op de achtergrond (opent waarschijnlijk een terminal/console-venster op Windows, of draait zonder zichtbaar venster na de eerste toestemming op macOS). Het toont systeemmeldingen wanneer nieuwe examen-slots worden gevonden. Om te stoppen, sluit u het terminal/console-venster of gebruikt u de Activiteitenweergave (macOS) / Taakbeheer (Windows) om het proces te beëindigen.
 
 ### Script gebruik
-1.  Zorg ervoor dat Python en de vereiste bibliotheken zijn geïnstalleerd (`pip install requests pytz`).
-2.  Plaats het `sbat.py`-script in een map.
-3.  Voer het script uit vanaf uw terminal: `python sbat.py`
-4.  Als `config.ini` niet bestaat, volg dan de instructies om uw inloggegevens in te voeren.
-5.  Het script draait continu op de achtergrond, controleert op beschikbare slots en toont meldingen wanneer er nieuwe worden gevonden.
+1. Zorg ervoor dat Python en de vereiste bibliotheken zijn geïnstalleerd (`pip install requests pytz`).
+2. Voer 1 van de scripts uit vanaf uw terminal: `python sbat.py`
+   * `python sbat.py`
+   * `python sbat_gui_pyside.py` (MacOS/Windows)
+   * `python sbat_gui_gtk.py` (Linux)
+3. Als `config.ini` niet bestaat, volg dan de instructies om uw inloggegevens in te voeren.
+4. Het script draait continu op de achtergrond, controleert op beschikbare slots en toont meldingen wanneer er nieuwe worden gevonden.
 
 
 ### Configuratie
