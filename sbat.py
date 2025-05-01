@@ -1,12 +1,13 @@
 import requests
 import time
 import pytz
-from datetime import datetime, timedelta
 import subprocess
 import configparser
 import os
 import sys
 import platform
+
+from constants import *
 
 
 def get_credentials(write: bool = False):
@@ -47,77 +48,6 @@ url = "https://api.rijbewijs.sbat.be/praktijk/api/exam/available"
 auth_url = "https://api.rijbewijs.sbat.be/praktijk/api/user/authenticate"
 auth = get_credentials()
 
-# An example response from the SBAT API
-response_example = [
-    {
-        "id": 316276,
-        "typesBlob": '["B"]',
-        "examTypesBlob": '["E2"]',
-        "examType": "E2",
-        "from": "2024-08-30T10:15:00",
-        "till": "2024-08-30T11:10:00",
-        "dayScheduleId": 135,
-        "examCenterId": 7,
-        "drivingSchool": None,
-        "examinee": None,
-        "isPublic": True,
-    },
-    {
-        "id": 316289,
-        "typesBlob": '["B"]',
-        "examTypesBlob": '["E2"]',
-        "examType": "E2",
-        "from": "2024-08-30T09:20:00",
-        "till": "2024-08-30T10:15:00",
-        "dayScheduleId": 131,
-        "examCenterId": 7,
-        "drivingSchool": None,
-        "examinee": None,
-        "isPublic": True,
-    },
-    {
-        "id": 316341,
-        "typesBlob": '["B"]',
-        "examTypesBlob": '["E2"]',
-        "examType": "E2",
-        "from": "2024-08-30T11:10:00",
-        "till": "2024-08-30T12:05:00",
-        "dayScheduleId": 131,
-        "examCenterId": 7,
-        "drivingSchool": None,
-        "examinee": None,
-        "isPublic": True,
-    },
-    {
-        "id": 340213,
-        "typesBlob": '["B"]',
-        "examTypesBlob": '["E2"]',
-        "examType": "E2",
-        "from": "2024-08-30T16:05:00",
-        "till": "2024-08-30T17:00:00",
-        "dayScheduleId": 131,
-        "examCenterId": 7,
-        "drivingSchool": None,
-        "examinee": None,
-        "isPublic": True,
-    },
-]
-
-# IDs of the 5 exam centers in East-Flanders
-center_ids = [
-    (7, "Brakel"),
-    (10, "Sint-Niklaas"),
-    (1, "St-Denijs"),
-    (9, "Erembodegem"),
-    (8, "Eeklo"),
-]
-# We search for exam dates for Rijbewijs B, from tomorrow onwards
-payload = {
-    "licenseType": "B",
-    "examType": "E2",
-    # "startDate": f'{datetime.now().strftime("%Y-%m-%d")}T00:00'
-    "startDate": f"{(datetime.now() + timedelta(hours=24)).strftime('%Y-%m-%d')}T00:00",
-}
 all_dates_seen = set()
 previous_dates = set()
 
@@ -186,40 +116,45 @@ def update_auth(headers: dict):
     headers["Authorization"] = f"Bearer {auth_response.text}"
 
 
-headers = {
-    "Content-Type": "application/json",
-    "User-Agent": "curl/7.64.1",
-}
-update_auth(headers)
+if __name__ == "__main__":
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "curl/7.64.1",
+    }
+    update_auth(headers)
 
-while True:
-    check_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    centers_available, new_dates = {}, set()
-    for id, center in center_ids:
-        payload["examCenterId"] = id
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code != 200:
-            print(check_timestamp, "PROBLEM", response.status_code, response.content)
-            update_auth(headers)
-            response = requests.post(url, headers=headers, json=payload)
+    while True:
+        check_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        centers_available, new_dates = {}, set()
+        for id, center in CENTER_IDS:
+            PAYLOAD_BASE["examCenterId"] = id
+            response = requests.post(url, headers=headers, json=PAYLOAD_BASE)
+            if response.status_code != 200:
+                print(
+                    check_timestamp, "PROBLEM", response.status_code, response.content
+                )
+                update_auth(headers)
+                response = requests.post(url, headers=headers, json=PAYLOAD_BASE)
 
-            if not response.status_code != 200:
-                print(check_timestamp, "CRASH", response.status_code, response.content)
-                display_error(response)
-                sys.exit(1)
+                if not response.status_code != 200:
+                    print(
+                        check_timestamp, "CRASH", response.status_code, response.content
+                    )
+                    display_error(response)
+                    sys.exit(1)
 
-        if data := response.json():
-            centers_available[center] = data
-            new_dates = new_dates.union(
-                {center + " " + slot.get("from", "")[:10] for slot in data}
-            )
+            if data := response.json():
+                centers_available[center] = data
+                new_dates = new_dates.union(
+                    {center + " " + slot.get("from", "")[:10] for slot in data}
+                )
 
-    all_dates_seen = all_dates_seen.union(new_dates)
-    if centers_available and not new_dates.issubset(previous_dates):
-        previous_dates = new_dates
-        print(check_timestamp, centers_available.items())
-        display_dialog(centers_available)
-    else:
-        print(check_timestamp, "nothing new going on", all_dates_seen)
+        all_dates_seen = all_dates_seen.union(new_dates)
+        if centers_available and not new_dates.issubset(previous_dates):
+            previous_dates = new_dates
+            print(check_timestamp, centers_available.items())
+            display_dialog(centers_available)
+        else:
+            print(check_timestamp, "nothing new going on", all_dates_seen)
 
-    time.sleep(get_sleep_time())
+        time.sleep(get_sleep_time())
