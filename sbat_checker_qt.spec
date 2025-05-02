@@ -12,7 +12,7 @@ qt_plugins_base_dir = os.path.join(pyside6_dir, 'Qt', 'plugins')
 qt_plugins = []
 
 a = Analysis(
-    ['sbat_pyside.py'],
+    ['sbat_gui_pyside.py'],
     pathex=[],
     binaries=qt_binaries,
     datas=qt_plugins,
