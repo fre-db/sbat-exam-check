@@ -1,11 +1,10 @@
 import requests
 import pytz
-import configparser
-import os
 import sys
 import threading
 import queue  # For thread-safe communication
 from constants import *
+from auth import get_token, authenticate_with_browser, load_cached_token, test_token, save_cached_token
 
 # --- GTK Imports ---
 import gi  # pip install pycairo PyGObject
@@ -24,63 +23,9 @@ gui_queue = queue.Queue()  # Queue for thread-safe GUI updates
 
 
 # --- Utility Functions ---
-def get_config_path():
-    """Determines the correct path for the config.ini file."""
-    if getattr(sys, "frozen", False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, CONFIG_FILENAME)
-
-
 def log_message(message):
     """Safely adds a message to the GUI log area from any thread via queue."""
     gui_queue.put(message)
-
-
-def load_credentials_from_config():
-    """Loads credentials from config.ini if it exists."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    username, password = "", ""
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-            username = config.get("Credentials", "username", fallback="")
-            password = config.get("Credentials", "password", fallback="")
-        except configparser.Error as e:
-            # Can't use log_message here reliably before GUI loop starts
-            print(f"[Config Load Error] {config_file}: {e}")
-    return {"username": username, "password": password}
-
-
-def save_credentials_to_config(username, password):
-    """Saves credentials to config.ini."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-        except configparser.Error as e:
-            log_message(f"Warning: Could not read existing config before saving: {e}")
-            config = configparser.ConfigParser()
-
-    if "Credentials" not in config:
-        config.add_section("Credentials")
-
-    config.set("Credentials", "username", username)
-    config.set("Credentials", "password", password)
-
-    try:
-        with open(config_file, "w") as configfile:
-            config.write(configfile)
-        log_message(f"Credentials saved to '{config_file}'.")
-        return True
-    except IOError as e:
-        log_message(f"Error saving credentials to {config_file}: {e}")
-        # Show GTK error dialog (needs main window reference)
-        show_error_dialog("File Error", f"Could not save credentials:\n{e}")
-        return False
 
 
 def get_sleep_time() -> int:
@@ -128,43 +73,14 @@ def show_info_dialog(title, message, parent_window=None):
 
 
 # --- API Interaction ---
-
-
-def attempt_authentication(username, password):
-    """Attempts to authenticate and returns the token or None."""
-    global auth_token
-    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-    credentials = {"username": username, "password": password}
-    log_message("Attempting authentication...")
-    try:
-        response = requests.post(
-            AUTH_URL, json=credentials, headers=headers, timeout=15
-        )
-        if response.status_code == 200 and response.text:
-            log_message("Authentication successful.")
-            auth_token = response.text
-            return auth_token
-        else:
-            log_message(
-                f"Authentication failed. Status: {response.status_code}, Response: {response.text[:200]}..."
-            )
-            auth_token = None
-            return None
-    except requests.exceptions.RequestException as e:
-        log_message(f"Network error during authentication: {e}")
-        auth_token = None
-        return None
-
-
-def run_checks(username, password):
+def run_checks():
     """The main checking loop running in the background thread."""
     global auth_token, all_dates_seen, previous_dates
 
     if not auth_token:
-        if not attempt_authentication(username, password):
-            log_message("Initial authentication failed in thread. Stopping checks.")
-            gui_queue.put("STOPPED_AUTH_FAILURE")
-            return
+        log_message("No valid token. Stopping checks.")
+        gui_queue.put("STOPPED_AUTH_FAILURE")
+        return
 
     headers = {
         "Content-Type": "application/json",
@@ -224,15 +140,9 @@ def run_checks(username, password):
             break
 
         if auth_needed:
-            new_token = attempt_authentication(username, password)
-            if new_token:
-                headers["Authorization"] = f"Bearer {new_token}"
-                log_message("Re-authentication successful. Continuing checks.")
-                continue
-            else:
-                log_message("Re-authentication failed. Stopping checks.")
-                gui_queue.put("STOPPED_AUTH_FAILURE")
-                break
+            log_message("Token expired. Please re-authenticate via itsme.")
+            gui_queue.put("NEEDS_REAUTH")
+            break
 
         if not request_failed_in_cycle:
             newly_found_dates = current_run_dates - previous_dates
@@ -295,31 +205,46 @@ class SbatCheckerWindow(Gtk.Window):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.add(vbox)
 
-        # --- Credentials Frame ---
-        cred_frame = Gtk.Frame(label="Credentials")
-        vbox.pack_start(cred_frame, False, True, 0)
+        # --- Authentication Frame ---
+        auth_frame = Gtk.Frame(label="Authentication")
+        vbox.pack_start(auth_frame, False, True, 0)
 
-        cred_grid = Gtk.Grid(column_spacing=10, row_spacing=5, margin=10)
-        cred_frame.add(cred_grid)
+        auth_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5, margin=10)
+        auth_frame.add(auth_vbox)
 
-        user_label = Gtk.Label(label="Username:", xalign=0)
-        self.user_entry = Gtk.Entry()
-        self.user_entry.set_hexpand(True)
-        cred_grid.attach(user_label, 0, 0, 1, 1)
-        cred_grid.attach(self.user_entry, 1, 0, 1, 1)
+        # itsme login row
+        itsme_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        auth_vbox.pack_start(itsme_box, False, True, 0)
 
-        pass_label = Gtk.Label(label="Password:", xalign=0)
-        self.pass_entry = Gtk.Entry()
-        # self.pass_entry.set_visibility(False) # Mask password
-        self.pass_entry.set_hexpand(True)
-        cred_grid.attach(pass_label, 0, 1, 1, 1)
-        cred_grid.attach(self.pass_entry, 1, 1, 1, 1)
+        self.itsme_button = Gtk.Button(label="Login with itsme")
+        self.itsme_button.connect("clicked", self.on_itsme_login)
+        itsme_box.pack_start(self.itsme_button, False, False, 0)
+
+        self.auth_status_label = Gtk.Label(label="")
+        itsme_box.pack_start(self.auth_status_label, False, False, 0)
+
+        # Token paste row
+        token_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        auth_vbox.pack_start(token_box, False, True, 0)
+
+        token_label = Gtk.Label(label="Or paste token:")
+        token_box.pack_start(token_label, False, False, 0)
+
+        self.token_entry = Gtk.Entry()
+        self.token_entry.set_placeholder_text("Bearer token from browser DevTools")
+        self.token_entry.set_hexpand(True)
+        token_box.pack_start(self.token_entry, True, True, 0)
+
+        self.token_paste_button = Gtk.Button(label="Use Token")
+        self.token_paste_button.connect("clicked", self.on_paste_token)
+        token_box.pack_start(self.token_paste_button, False, False, 0)
 
         # --- Control Area ---
         control_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         vbox.pack_start(control_box, False, True, 0)
 
         self.start_stop_button = Gtk.Button(label="Start Checking")
+        self.start_stop_button.set_sensitive(False)  # Disabled until authenticated
         self.start_stop_button.connect("clicked", self.on_start_stop_clicked)
         control_box.pack_start(self.start_stop_button, False, False, 0)
 
@@ -343,14 +268,12 @@ class SbatCheckerWindow(Gtk.Window):
         self.scrolled_window.add(self.log_view)
 
         # --- Initial Setup ---
-        initial_creds = load_credentials_from_config()
-        self.user_entry.set_text(initial_creds.get("username", ""))
-        self.pass_entry.set_text(initial_creds.get("password", ""))
-
-        if initial_creds.get("username"):
-            self.append_log("Credentials loaded from config.ini.")
+        cached = load_cached_token()
+        if cached:
+            self.append_log("Cached token found. Testing validity...")
+            threading.Thread(target=self._test_cached_token, args=(cached,), daemon=True).start()
         else:
-            self.append_log("config.ini not found or empty. Please enter credentials.")
+            self.append_log("No cached token. Please login with itsme or paste a token.")
 
         # Start processing the GUI update queue
         self.timeout_id = GLib.timeout_add(
@@ -375,28 +298,105 @@ class SbatCheckerWindow(Gtk.Window):
             adj.set_value(adj.get_upper() - adj.get_page_size())
         return False  # Run only once via GLib.idle_add
 
+    def _test_cached_token(self, token):
+        """Test cached token in background thread."""
+        global auth_token
+        if test_token(token):
+            auth_token = token
+            gui_queue.put("CACHED_TOKEN_VALID")
+        else:
+            gui_queue.put("CACHED_TOKEN_INVALID")
+
+    def on_itsme_login(self, widget):
+        """Launch browser-based itsme authentication."""
+        self.itsme_button.set_sensitive(False)
+        self.auth_status_label.set_text("Opening browser... Confirm on itsme app.")
+        self.append_log("Starting itsme authentication...")
+        threading.Thread(target=self._do_itsme_auth, daemon=True).start()
+
+    def _do_itsme_auth(self):
+        """Run itsme browser auth in background thread."""
+        global auth_token
+        token = authenticate_with_browser(log_fn=log_message)
+        if token:
+            auth_token = token
+            gui_queue.put("ITSME_AUTH_SUCCESS")
+        else:
+            gui_queue.put("ITSME_AUTH_FAILURE")
+
+    def on_paste_token(self, widget):
+        """Handle manual token paste."""
+        global auth_token
+        token = self.token_entry.get_text().strip()
+        if not token:
+            show_error_dialog("Input Required", "Please paste a Bearer token.", parent_window=self)
+            return
+        self.append_log("Testing pasted token...")
+        self.token_paste_button.set_sensitive(False)
+        threading.Thread(target=self._test_pasted_token, args=(token,), daemon=True).start()
+
+    def _test_pasted_token(self, token):
+        """Test pasted token in background thread."""
+        global auth_token
+        if test_token(token):
+            auth_token = token
+            save_cached_token(token)
+            gui_queue.put("PASTE_TOKEN_VALID")
+        else:
+            gui_queue.put("PASTE_TOKEN_INVALID")
+
     def process_gui_queue_gtk(self):
-        """Processes messages from the queue to update the GUI log."""
+        """Processes messages from the queue to update the GUI."""
         try:
             while True:
                 message = gui_queue.get_nowait()
-                if message == "STOPPED_AUTH_FAILURE":
-                    self.append_log("Authentication failed. Controls reset.")
+
+                if message == "CACHED_TOKEN_VALID":
+                    self.append_log("Cached token is valid. Ready to start checking.")
+                    self.auth_status_label.set_text("Authenticated (cached token)")
+                    self.start_stop_button.set_sensitive(True)
+                elif message == "CACHED_TOKEN_INVALID":
+                    self.append_log("Cached token expired. Please re-authenticate.")
+                    self.auth_status_label.set_text("")
+
+                elif message == "ITSME_AUTH_SUCCESS":
+                    self.append_log("itsme authentication successful!")
+                    self.auth_status_label.set_text("Authenticated via itsme")
+                    self.itsme_button.set_sensitive(True)
+                    self.start_stop_button.set_sensitive(True)
+                elif message == "ITSME_AUTH_FAILURE":
+                    self.append_log("itsme authentication failed or timed out.")
+                    self.auth_status_label.set_text("Authentication failed")
+                    self.itsme_button.set_sensitive(True)
+
+                elif message == "PASTE_TOKEN_VALID":
+                    self.append_log("Pasted token is valid. Ready to start checking.")
+                    self.auth_status_label.set_text("Authenticated (pasted token)")
+                    self.token_paste_button.set_sensitive(True)
+                    self.start_stop_button.set_sensitive(True)
+                elif message == "PASTE_TOKEN_INVALID":
+                    self.append_log("Pasted token is invalid or expired.")
+                    show_error_dialog("Invalid Token", "The pasted token is not valid.", parent_window=self)
+                    self.token_paste_button.set_sensitive(True)
+
+                elif message == "NEEDS_REAUTH":
+                    self.append_log("Token expired during checks. Please re-authenticate.")
+                    self.reset_gui_controls()
+                elif message == "STOPPED_AUTH_FAILURE":
+                    self.append_log("Authentication failed during checks. Controls reset.")
                     self.reset_gui_controls()
                 elif message == "STOPPED_NORMAL":
                     self.append_log("Checker stopped normally. Controls reset.")
                     self.reset_gui_controls()
                 elif isinstance(message, tuple) and message[0] == "SHOW_INFO":
                     show_info_dialog("NEW DATES FOUND", message[1], parent_window=self)
-                else:
+                elif isinstance(message, str):
                     self.append_log(message)
         except queue.Empty:
-            pass  # No messages in the queue
-        # Reschedule itself - crucial!
+            pass
         return True  # Keep the timeout running
 
     def on_start_stop_clicked(self, widget):
-        """Handles the Start/Stop button click."""
         label = widget.get_label()
         if label == "Start Checking":
             self.start_checking()
@@ -404,49 +404,31 @@ class SbatCheckerWindow(Gtk.Window):
             self.stop_checking()
 
     def start_checking(self):
-        global checking_thread, stop_event, auth_token, all_dates_seen, previous_dates
+        global checking_thread, stop_event, all_dates_seen, previous_dates
 
         if checking_thread and checking_thread.is_alive():
             self.append_log("Checker is already running.")
             return
 
-        user = self.user_entry.get_text()
-        pwd = self.pass_entry.get_text()
-
-        if not user or not pwd:
+        if not auth_token:
             show_error_dialog(
-                "Input Required",
-                "Please enter both username and password.",
+                "Not Authenticated",
+                "Please login with itsme or paste a valid token first.",
                 parent_window=self,
             )
             return
 
-        # Reset state variables
         stop_event.clear()
-        auth_token = None
         all_dates_seen = set()
         previous_dates = set()
 
-        # Attempt initial authentication (can block GUI briefly, consider moving to thread if too long)
-        token = attempt_authentication(user, pwd)
-        if token:
-            save_credentials_to_config(user, pwd)
+        self.itsme_button.set_sensitive(False)
+        self.token_entry.set_sensitive(False)
+        self.token_paste_button.set_sensitive(False)
+        self.start_stop_button.set_label("Stop Checking")
 
-            # Update GUI
-            self.user_entry.set_sensitive(False)
-            self.pass_entry.set_sensitive(False)
-            self.start_stop_button.set_label("Stop Checking")
-
-            # Start the background thread
-            checking_thread = threading.Thread(
-                target=run_checks, args=(user, pwd), daemon=True
-            )
-            checking_thread.start()
-        else:
-            show_error_dialog(
-                "Authentication Failed",
-                "Could not authenticate. Check details.",
-            )
+        checking_thread = threading.Thread(target=run_checks, daemon=True)
+        checking_thread.start()
 
     def stop_checking(self):
         global checking_thread
@@ -455,15 +437,15 @@ class SbatCheckerWindow(Gtk.Window):
             stop_event.set()
         else:
             self.append_log("Checker is not running.")
-        # Reset GUI controls immediately
         self.reset_gui_controls()
 
     def reset_gui_controls(self):
         """Resets the GUI controls to the 'stopped' state."""
-        self.user_entry.set_sensitive(True)
-        self.pass_entry.set_sensitive(True)
+        self.itsme_button.set_sensitive(True)
+        self.token_entry.set_sensitive(True)
+        self.token_paste_button.set_sensitive(True)
         self.start_stop_button.set_label("Start Checking")
-        # Don't log here, the calling function/queue message should log
+        self.start_stop_button.set_sensitive(bool(auth_token))
 
     def on_destroy(self, *args):
         """Handles window close event."""
