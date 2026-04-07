@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": ["python3@latest"],
+  "shell": {
+    "init_hook": [
+      ". $VENV_DIR/bin/activate"
+    ],
+    "scripts": {
+      "cli": ["python sbat.py"],
+      "gui": ["python sbat_gui_pyside.py"],
+      "gui-gtk": ["python sbat_gui_gtk.py"],
+      "setup": [
+        "pip install -r requirements.txt && playwright install chromium"
+      ]
+    }
+  }
+}
