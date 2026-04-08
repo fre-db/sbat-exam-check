@@ -2,22 +2,237 @@
 Authentication module for SBAT exam checker.
 
 Supports two methods:
-1. Playwright-based browser auth (itsme OIDC flow)
+1. AuthSession — persistent Playwright browser session with silent token refresh
 2. Manual token paste (fallback)
 
-Tokens are ~1 hour TTL so they are only kept in memory, not persisted to disk.
+Tokens are ~1 hour TTL. AuthSession keeps the browser context alive so the
+itsme session cookies persist, enabling silent re-authentication without
+requiring the user to confirm on their phone again.
 """
 
+import base64
+import json
+import queue
+import threading
 import time
+from datetime import datetime, timezone
 
 from constants import SBAT_LOGIN_URL, AVAILABLE_URL
 
+
+def _decode_jwt_exp(token):
+    """
+    Decode the JWT payload and return the expiry as a UTC datetime.
+    Does not verify the signature — only used for scheduling refresh.
+    Returns None if decoding fails.
+    """
+    try:
+        payload_b64 = token.split(".")[1]
+        # JWT uses base64url encoding without padding
+        padding = 4 - len(payload_b64) % 4
+        if padding != 4:
+            payload_b64 += "=" * padding
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        exp = payload.get("exp")
+        if exp:
+            return datetime.fromtimestamp(exp, tz=timezone.utc)
+    except Exception:
+        pass
+    return None
+
+
+def _capture_token_from_request(request, log):
+    """
+    Try to extract a Bearer token from a Playwright request.
+    Returns the token string or None.
+    """
+    url = request.url
+
+    # Method 1: Token in callback URL query parameter
+    if "callback" in url and "token=" in url:
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(url)
+            token_values = parse_qs(parsed.query).get("token", [])
+            if token_values:
+                log("Token captured from callback URL.")
+                return token_values[0]
+        except Exception:
+            pass
+
+    # Method 2: Bearer token in Authorization request header
+    if "rijbewijs" in url and "sbat" in url:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:]
+            if token:
+                log("Token captured from request Authorization header.")
+                return token
+
+    return None
+
+
+class AuthSession:
+    """
+    Manages a persistent Playwright browser session for SBAT itsme authentication.
+
+    Keeps the browser context alive after initial auth so itsme session cookies
+    are preserved. Subsequent token refreshes navigate the same page back to the
+    login URL — if the itsme session is still valid, a new JWT is issued without
+    requiring phone confirmation.
+
+    Uses a dedicated background thread for all Playwright operations (Playwright
+    sync API must be used from a single thread).
+    """
+
+    def __init__(self, log_fn=None):
+        self._log_fn = log_fn
+        self._command_queue = queue.Queue()
+        self._thread = None
+        self.token = None
+        self.token_expiry = None  # UTC datetime
+
+    def _log(self, msg):
+        if self._log_fn:
+            self._log_fn(msg)
+        else:
+            print(msg)
+
+    def start(self):
+        """
+        Launch the browser and perform initial itsme authentication.
+        Blocks until a token is captured or timeout (120s).
+        Returns the token string, or None on failure.
+        """
+        result = {"token": None}
+        done = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run_loop, args=(result, done), daemon=True
+        )
+        self._thread.start()
+        done.wait()  # Wait for initial auth to complete
+        return result["token"]
+
+    def refresh_token(self):
+        """
+        Silently refresh the token by navigating the existing browser page back
+        to the SBAT login URL. Relies on itsme session cookies being preserved.
+        Blocks until a new token is captured or timeout (30s).
+        Returns the new token string, or None if silent refresh failed.
+        """
+        result = {"token": None}
+        done = threading.Event()
+        self._command_queue.put(("refresh", result, done))
+        done.wait(timeout=35)  # Slightly longer than the 30s internal timeout
+        return result["token"]
+
+    def close(self):
+        """Clean up the browser and stop the Playwright thread."""
+        if self._thread and self._thread.is_alive():
+            self._command_queue.put(("close", None, None))
+            self._thread.join(timeout=5)
+
+    def _run_loop(self, initial_result, initial_done):
+        """
+        Playwright thread main loop. Handles initial auth then processes
+        refresh/close commands from the queue.
+        """
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self._log("Playwright is not installed. Run: pip install playwright && playwright install chromium")
+            initial_result["token"] = None
+            initial_done.set()
+            return
+
+        with sync_playwright() as p:
+            # Try system Chrome first, fall back to Playwright's bundled Chromium
+            try:
+                browser = p.chromium.launch(headless=False, channel="chrome")
+            except Exception:
+                browser = p.chromium.launch(headless=False)
+
+            context = browser.new_context()
+            page = context.new_page()
+
+            # --- Initial authentication ---
+            token = self._wait_for_token(page, timeout=120)
+            initial_result["token"] = token
+            if token:
+                self.token = token
+                self.token_expiry = _decode_jwt_exp(token)
+            initial_done.set()
+
+            if not token:
+                browser.close()
+                return
+
+            # --- Command loop: process refresh/close requests ---
+            while True:
+                try:
+                    cmd, result, done = self._command_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+
+                if cmd == "close":
+                    break
+
+                if cmd == "refresh":
+                    self._log("Attempting silent token refresh...")
+                    new_token = self._wait_for_token(page, timeout=30)
+                    if new_token:
+                        self.token = new_token
+                        self.token_expiry = _decode_jwt_exp(new_token)
+                        self._log("Token refreshed silently.")
+                    else:
+                        self._log("Silent refresh failed. Re-authentication required.")
+                    result["token"] = new_token
+                    done.set()
+
+            browser.close()
+
+    def _wait_for_token(self, page, timeout):
+        """
+        Navigate to the SBAT login URL and wait for a token to be captured.
+        Returns the token string or None on timeout.
+        """
+        captured = {"token": None}
+
+        def on_request(request):
+            if captured["token"]:
+                return
+            token = _capture_token_from_request(request, self._log)
+            if token:
+                captured["token"] = token
+
+        page.on("request", on_request)
+        self._log("Opening browser for itsme authentication...")
+        self._log("Please confirm your identity in the itsme app on your phone.")
+        page.goto(SBAT_LOGIN_URL)
+
+        start = time.time()
+        while not captured["token"] and time.time() - start < timeout:
+            try:
+                page.wait_for_timeout(500)
+            except Exception:
+                break
+
+        page.remove_listener("request", on_request)
+
+        if not captured["token"]:
+            self._log(f"Authentication timed out after {timeout}s.")
+        return captured["token"]
+
+
+# ---------------------------------------------------------------------------
+# Standalone helpers — used for manual token paste and CLI --token flag
+# ---------------------------------------------------------------------------
 
 def test_token(token):
     """Test if a Bearer token is still valid by making a lightweight API request."""
     import requests
     from constants import CENTER_IDS, USER_AGENT
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     headers = {
         "Content-Type": "application/json",
@@ -39,94 +254,16 @@ def test_token(token):
 
 def authenticate_with_browser(log_fn=None):
     """
-    Open a browser for itsme authentication and capture the Bearer token.
-
-    Opens the SBAT login page in a visible Chromium browser. The user completes
-    the itsme OIDC flow on their phone. The script intercepts the resulting
-    Bearer token from the callback URL or API request headers.
-
-    Args:
-        log_fn: Optional callback for log messages (e.g., gui_queue.put)
-
-    Returns:
-        The Bearer token string, or None if authentication failed/timed out.
+    Convenience function for one-shot browser auth (CLI use).
+    Opens a browser, waits for token, closes browser.
+    For the GUI, prefer AuthSession which keeps the browser alive for silent refresh.
     """
-    def log(msg):
-        if log_fn:
-            log_fn(msg)
-        else:
-            print(msg)
-
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        log("Playwright is not installed. Install with: pip install playwright && playwright install chromium")
-        return None
-
-    captured_token = None
-
-    log("Opening browser for itsme authentication...")
-    log("Please confirm your identity in the itsme app on your phone.")
-
-    with sync_playwright() as p:
-        # Try system Chrome first (no need for playwright install chromium),
-        # fall back to Playwright's bundled Chromium
-        try:
-            browser = p.chromium.launch(headless=False, channel="chrome")
-        except Exception:
-            browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
-        page = context.new_page()
-
-        def on_request(request):
-            nonlocal captured_token
-            if captured_token:
-                return
-            url = request.url
-
-            # Method 1: Extract token from callback URL query parameter
-            # SBAT redirects to /callback?token=<JWT> after itsme auth
-            if "callback" in url and "token=" in url:
-                try:
-                    from urllib.parse import urlparse, parse_qs
-                    parsed = urlparse(url)
-                    token_values = parse_qs(parsed.query).get("token", [])
-                    if token_values:
-                        captured_token = token_values[0]
-                        log("Token captured from callback URL.")
-                        return
-                except Exception:
-                    pass
-
-            # Method 2: Intercept Bearer token from API request headers
-            if "rijbewijs" in url and "sbat" in url:
-                auth_header = request.headers.get("authorization", "")
-                if auth_header.lower().startswith("bearer "):
-                    token = auth_header[7:]  # Skip "bearer " (7 chars)
-                    if token:
-                        captured_token = token
-                        log("Token captured from request Authorization header.")
-
-        page.on("request", on_request)
-
-        page.goto(SBAT_LOGIN_URL)
-
-        # Wait for the token to be captured (timeout after 120 seconds)
-        timeout = 120
-        start = time.time()
-        while not captured_token and time.time() - start < timeout:
-            try:
-                page.wait_for_timeout(1000)
-            except Exception:
-                break
-
-        browser.close()
-
-    if captured_token:
-        return captured_token
-    else:
-        log("Authentication timed out. No token captured within 120 seconds.")
-        return None
+    session = AuthSession(log_fn=log_fn)
+    token = session.start()
+    # For one-shot use, close immediately after getting the token
+    if token:
+        session.close()
+    return token
 
 
 def get_token(manual_token=None, log_fn=None):
@@ -134,15 +271,10 @@ def get_token(manual_token=None, log_fn=None):
     Get a valid Bearer token using the best available method.
 
     Tries in order:
-    1. Manual token (if provided via --token flag or paste)
+    1. Manual token (if provided via --token flag)
     2. Browser-based itsme authentication
 
-    Args:
-        manual_token: A manually provided Bearer token (optional)
-        log_fn: Optional callback for log messages
-
-    Returns:
-        A valid Bearer token string, or None if all methods fail.
+    For the GUI, use AuthSession directly instead to enable silent refresh.
     """
     def log(msg):
         if log_fn:

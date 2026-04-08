@@ -21,11 +21,14 @@ sbat_gui_pyside.py  — PySide6/Qt GUI (cross-platform)
 
 ## Authentication Flow
 SBAT uses Belgium's itsme app (OpenID Connect) for authentication:
-1. Playwright opens `https://rijbewijs.sbat.be/praktijk/examen/login` in a visible browser
-2. User confirms identity via itsme phone app
-3. Script intercepts the resulting Bearer token from the callback URL or API request headers
-4. Token is kept in memory only (~1 hour TTL, not persisted to disk)
-5. Fallback: `--token` CLI flag or "Paste Token" GUI field for manual token entry
+1. `AuthSession` opens a visible browser to `https://rijbewijs.sbat.be/praktijk/examen/login`
+2. User confirms identity via itsme phone app (once)
+3. Bearer token is captured from the callback URL or API request headers
+4. Browser context stays alive — itsme session cookies are preserved
+5. JWT `exp` claim is decoded to schedule a silent refresh ~5 min before expiry
+6. On refresh: existing page navigates back to login URL; itsme session auto-completes OIDC without phone confirmation
+7. If silent refresh fails (itsme session expired): user is prompted for full re-auth
+8. Fallback: `--token` CLI flag or "Paste Token" GUI field (no silent refresh available for manual tokens)
 
 ## API Details
 - **Base URL:** `https://api-rijbewijs.sbat.be/praktijk/api/`

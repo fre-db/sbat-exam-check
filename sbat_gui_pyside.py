@@ -5,7 +5,8 @@ import sys
 import threading
 import queue  # For thread-safe communication
 from constants import *
-from auth import authenticate_with_browser, test_token
+from auth import AuthSession, test_token
+from datetime import timezone
 
 # --- PySide6 Imports ---
 from PySide6.QtWidgets import (
@@ -30,6 +31,7 @@ from PySide6.QtGui import QTextCursor, QFont  # Import QFont
 checking_thread = None
 stop_event = threading.Event()
 auth_token = None
+auth_session = None  # Persistent AuthSession for itsme (enables silent refresh)
 all_dates_seen = set()
 previous_dates = set()
 gui_queue = queue.Queue()  # Queue for thread-safe GUI updates
@@ -325,6 +327,11 @@ class SbatCheckerWindow(QMainWindow):
         self.queue_timer.timeout.connect(self.process_gui_queue_qt)
         self.queue_timer.start(100)  # Check queue every 100ms
 
+        # --- Token Refresh Timer (fires once, before token expiry) ---
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self._on_refresh_timer)
+
     def append_log(self, message):
         """Appends a message to the Qt QTextEdit."""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -335,21 +342,58 @@ class SbatCheckerWindow(QMainWindow):
 
     @Slot()
     def on_itsme_login(self):
-        """Launch browser-based itsme authentication."""
+        """Launch browser-based itsme authentication via persistent AuthSession."""
+        global auth_session
         self.itsme_button.setEnabled(False)
         self.auth_status_label.setText("Opening browser... Confirm on itsme app.")
         self.append_log("Starting itsme authentication...")
+        # Close any existing session before starting a new one
+        if auth_session:
+            auth_session.close()
+        auth_session = AuthSession(log_fn=log_message)
         threading.Thread(target=self._do_itsme_auth, daemon=True).start()
 
     def _do_itsme_auth(self):
         """Run itsme browser auth in background thread."""
-        global auth_token
-        token = authenticate_with_browser(log_fn=log_message)
+        global auth_token, auth_session
+        token = auth_session.start()
         if token:
             auth_token = token
             gui_queue.put("ITSME_AUTH_SUCCESS")
         else:
             gui_queue.put("ITSME_AUTH_FAILURE")
+
+    def _schedule_token_refresh(self):
+        """Schedule a silent token refresh ~5 minutes before the token expires."""
+        global auth_session
+        if not auth_session or not auth_session.token_expiry:
+            return
+        now_utc = datetime.now(timezone.utc)
+        seconds_until_expiry = (auth_session.token_expiry - now_utc).total_seconds()
+        refresh_in = max(0, seconds_until_expiry - 300)  # 5 min before expiry
+        self.refresh_timer.start(int(refresh_in * 1000))
+        self.append_log(
+            f"Token valid for {int(seconds_until_expiry / 60)} min. "
+            f"Silent refresh scheduled in {int(refresh_in / 60)} min."
+        )
+
+    @Slot()
+    def _on_refresh_timer(self):
+        """Fired by the refresh timer — attempt silent token refresh."""
+        self.append_log("Refreshing token silently...")
+        threading.Thread(target=self._do_silent_refresh, daemon=True).start()
+
+    def _do_silent_refresh(self):
+        """Run silent token refresh in background thread."""
+        global auth_token, auth_session
+        if not auth_session:
+            return
+        new_token = auth_session.refresh_token()
+        if new_token:
+            auth_token = new_token
+            gui_queue.put("TOKEN_REFRESHED")
+        else:
+            gui_queue.put("NEEDS_REAUTH")
 
     @Slot()
     def on_paste_token(self):
@@ -392,6 +436,11 @@ class SbatCheckerWindow(QMainWindow):
                     self.append_log("itsme authentication successful! Starting checks...")
                     self.auth_status_label.setText("Authenticated via itsme")
                     self.start_checking()
+                    self._schedule_token_refresh()
+
+                elif message_data == "TOKEN_REFRESHED":
+                    self.append_log("Token refreshed silently.")
+                    self._schedule_token_refresh()
 
                 elif message_data == "ITSME_AUTH_FAILURE":
                     self.append_log("itsme authentication failed or timed out.")
@@ -412,6 +461,7 @@ class SbatCheckerWindow(QMainWindow):
 
                 elif message_data == "NEEDS_REAUTH":
                     self.append_log("Token expired. Please re-authenticate via itsme to continue.")
+                    self.refresh_timer.stop()
                     self.set_stopped_state(token_expired=True)
                 elif message_data == "STOPPED_AUTH_FAILURE":
                     self.append_log("Authentication failed. Please re-authenticate.")
@@ -461,6 +511,7 @@ class SbatCheckerWindow(QMainWindow):
         if checking_thread and checking_thread.is_alive():
             self.append_log("Stopping checker...")
             stop_event.set()
+            self.refresh_timer.stop()
             self.check_button.setEnabled(False)
             self.check_button.setText("Stopping...")
 
@@ -485,21 +536,25 @@ class SbatCheckerWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Handles window close event."""
-        global checking_thread
+        global checking_thread, auth_session
         self.append_log("Close requested.")
         if self.queue_timer:
-            self.queue_timer.stop()  # Stop the queue timer
+            self.queue_timer.stop()
+        self.refresh_timer.stop()
 
         if checking_thread and checking_thread.is_alive():
             self.append_log("Stopping checker thread...")
             stop_event.set()
-            # Give the thread a moment to stop - adjust timeout as needed
             checking_thread.join(timeout=1.5)
             if checking_thread.is_alive():
                 self.append_log("Warning: Checker thread did not stop gracefully.")
 
+        if auth_session:
+            auth_session.close()
+            auth_session = None
+
         self.append_log("Exiting application.")
-        event.accept()  # Accept the close event
+        event.accept()
 
 
 # --- Main Execution ---
