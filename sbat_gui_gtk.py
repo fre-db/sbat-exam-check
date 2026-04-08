@@ -4,7 +4,7 @@ import sys
 import threading
 import queue  # For thread-safe communication
 from constants import *
-from auth import get_token, authenticate_with_browser, load_cached_token, test_token, save_cached_token
+from auth import authenticate_with_browser, test_token
 
 # --- GTK Imports ---
 import gi  # pip install pycairo PyGObject
@@ -243,10 +243,10 @@ class SbatCheckerWindow(Gtk.Window):
         control_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         vbox.pack_start(control_box, False, True, 0)
 
-        self.start_stop_button = Gtk.Button(label="Start Checking")
-        self.start_stop_button.set_sensitive(False)  # Disabled until authenticated
-        self.start_stop_button.connect("clicked", self.on_start_stop_clicked)
-        control_box.pack_start(self.start_stop_button, False, False, 0)
+        self.check_button = Gtk.Button(label="Start Checking")
+        self.check_button.set_sensitive(False)
+        self.check_button.connect("clicked", self.on_check_button_clicked)
+        control_box.pack_start(self.check_button, False, False, 0)
 
         # --- Log Area ---
         log_frame = Gtk.Frame(label="Log Output")
@@ -268,12 +268,7 @@ class SbatCheckerWindow(Gtk.Window):
         self.scrolled_window.add(self.log_view)
 
         # --- Initial Setup ---
-        cached = load_cached_token()
-        if cached:
-            self.append_log("Cached token found. Testing validity...")
-            threading.Thread(target=self._test_cached_token, args=(cached,), daemon=True).start()
-        else:
-            self.append_log("No cached token. Please login with itsme or paste a token.")
+        self.append_log("Please login with itsme or paste a token to start.")
 
         # Start processing the GUI update queue
         self.timeout_id = GLib.timeout_add(
@@ -297,15 +292,6 @@ class SbatCheckerWindow(Gtk.Window):
             # Set the adjustment value to its upper limit to scroll down
             adj.set_value(adj.get_upper() - adj.get_page_size())
         return False  # Run only once via GLib.idle_add
-
-    def _test_cached_token(self, token):
-        """Test cached token in background thread."""
-        global auth_token
-        if test_token(token):
-            auth_token = token
-            gui_queue.put("CACHED_TOKEN_VALID")
-        else:
-            gui_queue.put("CACHED_TOKEN_INVALID")
 
     def on_itsme_login(self, widget):
         """Launch browser-based itsme authentication."""
@@ -340,7 +326,6 @@ class SbatCheckerWindow(Gtk.Window):
         global auth_token
         if test_token(token):
             auth_token = token
-            save_cached_token(token)
             gui_queue.put("PASTE_TOKEN_VALID")
         else:
             gui_queue.put("PASTE_TOKEN_INVALID")
@@ -351,43 +336,37 @@ class SbatCheckerWindow(Gtk.Window):
             while True:
                 message = gui_queue.get_nowait()
 
-                if message == "CACHED_TOKEN_VALID":
-                    self.append_log("Cached token is valid. Ready to start checking.")
-                    self.auth_status_label.set_text("Authenticated (cached token)")
-                    self.start_stop_button.set_sensitive(True)
-                elif message == "CACHED_TOKEN_INVALID":
-                    self.append_log("Cached token expired. Please re-authenticate.")
-                    self.auth_status_label.set_text("")
-
-                elif message == "ITSME_AUTH_SUCCESS":
-                    self.append_log("itsme authentication successful!")
+                if message == "ITSME_AUTH_SUCCESS":
+                    self.append_log("itsme authentication successful! Starting checks...")
                     self.auth_status_label.set_text("Authenticated via itsme")
-                    self.itsme_button.set_sensitive(True)
-                    self.start_stop_button.set_sensitive(True)
+                    self.start_checking()
+
                 elif message == "ITSME_AUTH_FAILURE":
                     self.append_log("itsme authentication failed or timed out.")
                     self.auth_status_label.set_text("Authentication failed")
                     self.itsme_button.set_sensitive(True)
+                    self.token_entry.set_sensitive(True)
+                    self.token_paste_button.set_sensitive(True)
 
                 elif message == "PASTE_TOKEN_VALID":
-                    self.append_log("Pasted token is valid. Ready to start checking.")
+                    self.append_log("Pasted token is valid. Starting checks...")
                     self.auth_status_label.set_text("Authenticated (pasted token)")
-                    self.token_paste_button.set_sensitive(True)
-                    self.start_stop_button.set_sensitive(True)
+                    self.start_checking()
+
                 elif message == "PASTE_TOKEN_INVALID":
                     self.append_log("Pasted token is invalid or expired.")
                     show_error_dialog("Invalid Token", "The pasted token is not valid.", parent_window=self)
                     self.token_paste_button.set_sensitive(True)
 
                 elif message == "NEEDS_REAUTH":
-                    self.append_log("Token expired during checks. Please re-authenticate.")
-                    self.reset_gui_controls()
+                    self.append_log("Token expired. Please re-authenticate via itsme to continue.")
+                    self.set_stopped_state(token_expired=True)
                 elif message == "STOPPED_AUTH_FAILURE":
-                    self.append_log("Authentication failed during checks. Controls reset.")
-                    self.reset_gui_controls()
+                    self.append_log("Authentication failed. Please re-authenticate.")
+                    self.set_stopped_state(token_expired=True)
                 elif message == "STOPPED_NORMAL":
-                    self.append_log("Checker stopped normally. Controls reset.")
-                    self.reset_gui_controls()
+                    self.append_log("Checker stopped.")
+                    self.set_stopped_state(token_expired=False)
                 elif isinstance(message, tuple) and message[0] == "SHOW_INFO":
                     show_info_dialog("NEW DATES FOUND", message[1], parent_window=self)
                 elif isinstance(message, str):
@@ -396,26 +375,19 @@ class SbatCheckerWindow(Gtk.Window):
             pass
         return True  # Keep the timeout running
 
-    def on_start_stop_clicked(self, widget):
-        label = widget.get_label()
-        if label == "Start Checking":
-            self.start_checking()
-        else:
+    def on_check_button_clicked(self, widget):
+        if widget.get_label() == "Stop Checking":
             self.stop_checking()
+        else:
+            self.start_checking()
 
     def start_checking(self):
         global checking_thread, stop_event, all_dates_seen, previous_dates
 
         if checking_thread and checking_thread.is_alive():
-            self.append_log("Checker is already running.")
             return
 
         if not auth_token:
-            show_error_dialog(
-                "Not Authenticated",
-                "Please login with itsme or paste a valid token first.",
-                parent_window=self,
-            )
             return
 
         stop_event.clear()
@@ -425,7 +397,8 @@ class SbatCheckerWindow(Gtk.Window):
         self.itsme_button.set_sensitive(False)
         self.token_entry.set_sensitive(False)
         self.token_paste_button.set_sensitive(False)
-        self.start_stop_button.set_label("Stop Checking")
+        self.check_button.set_label("Stop Checking")
+        self.check_button.set_sensitive(True)
 
         checking_thread = threading.Thread(target=run_checks, daemon=True)
         checking_thread.start()
@@ -435,17 +408,27 @@ class SbatCheckerWindow(Gtk.Window):
         if checking_thread and checking_thread.is_alive():
             self.append_log("Stopping checker...")
             stop_event.set()
-        else:
-            self.append_log("Checker is not running.")
-        self.reset_gui_controls()
+            self.check_button.set_sensitive(False)
+            self.check_button.set_label("Stopping...")
 
-    def reset_gui_controls(self):
-        """Resets the GUI controls to the 'stopped' state."""
-        self.itsme_button.set_sensitive(True)
-        self.token_entry.set_sensitive(True)
-        self.token_paste_button.set_sensitive(True)
-        self.start_stop_button.set_label("Start Checking")
-        self.start_stop_button.set_sensitive(bool(auth_token))
+    def set_stopped_state(self, token_expired):
+        """Update GUI after checking stops."""
+        global auth_token
+
+        if token_expired:
+            auth_token = None
+            self.auth_status_label.set_text("Token expired")
+            self.itsme_button.set_sensitive(True)
+            self.token_entry.set_sensitive(True)
+            self.token_paste_button.set_sensitive(True)
+            self.check_button.set_label("Start Checking")
+            self.check_button.set_sensitive(False)
+        else:
+            self.itsme_button.set_sensitive(True)
+            self.token_entry.set_sensitive(True)
+            self.token_paste_button.set_sensitive(True)
+            self.check_button.set_label("Start Checking")
+            self.check_button.set_sensitive(bool(auth_token))
 
     def on_destroy(self, *args):
         """Handles window close event."""

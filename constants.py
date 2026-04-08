@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta
 
-CONFIG_FILENAME = "config.ini"
-AUTH_URL = "https://api.rijbewijs.sbat.be/praktijk/api/user/authenticate"  # Legacy, no longer works
-AVAILABLE_URL = "https://api.rijbewijs.sbat.be/praktijk/api/exam/available"
+AVAILABLE_URL = "https://api-rijbewijs.sbat.be/praktijk/api/exam/available"
 SBAT_LOGIN_URL = "https://rijbewijs.sbat.be/praktijk/examen/login"
 USER_AGENT = "SBAT Exam Check GUI (github.com/fre-db/sbat-exam-check)"
 CENTER_IDS = [

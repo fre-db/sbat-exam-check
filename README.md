@@ -3,7 +3,7 @@
 ## English
 
 ### Description
-This Python script periodically checks the SBAT practical driving exam booking system (`api.rijbewijs.sbat.be`) for available slots for the Type B (car) practical exam in the East Flanders region of Belgium. It monitors specific exam centers and notifies the user via a system dialog and console message when new dates become available.
+This Python script periodically checks the SBAT practical driving exam booking system (`api-rijbewijs.sbat.be`) for available slots for the Type B (car) practical exam in the East Flanders region of Belgium. It monitors specific exam centers and notifies the user via a system dialog and console message when new dates become available.
 
 ### Releases / Pre-compiled Versions
 For users who prefer not to install Python or manage dependencies, pre-compiled versions for macOS and Windows are available.
@@ -14,8 +14,7 @@ For users who prefer not to install Python or manage dependencies, pre-compiled 
 2.  **Run:**
     * **Windows:** Double-click the `.exe` file. You might see a Windows SmartScreen warning because the application isn't signed. Click "More info" and then "Run anyway".
     * **macOS:** Double-click the file. You might see a security warning because the application is from an unidentified developer. Right-click (or Control-click) the app icon, choose "Open", and then click "Open" in the dialog box. You only need to do this the first time.
-3.  **First usage:** When you run the application for the first time, it will look for `config.ini` in the *same folder*. If not found, it will prompt you to enter your credentials and create the `config.ini` file.
-4.  **Operation:** The application will run in the background (likely opening a terminal/console window on Windows, or just running without a visible window after the initial permission on macOS). It will display system notifications when new exam slots are found. To stop it, close the terminal/console window or use the Activity Monitor (macOS) / Task Manager (Windows) to end the process.
+3.  **Operation:** The application will run in the background (likely opening a terminal/console window on Windows, or just running without a visible window after the initial permission on macOS). It will display system notifications when new exam slots are found. To stop it, close the terminal/console window or use the Activity Monitor (macOS) / Task Manager (Windows) to end the process.
 
 ### Script usage (with devbox)
 1.  Install [devbox](https://www.jetify.com/devbox) if you don't have it.
@@ -43,17 +42,10 @@ Alternatively, you can manually provide a Bearer token:
 * CLI: `python3 sbat.py --token YOUR_BEARER_TOKEN`
 * GUI: Use the "Paste Token" field
 
-The token is cached in `config.ini` and reused until it expires.
-
-### Configuration
-The application uses a `config.ini` file located in the same directory as the script. It stores a cached Bearer token for reuse:
-```ini
-[Token]
-bearer = YOUR_CACHED_TOKEN
-```
+Tokens are kept in memory only (~1 hour TTL) and are not saved to disk.
 
 ### Disclaimer
-* This script relies on an unofficial API endpoint (`api.rijbewijs.sbat.be`) used by the SBAT booking system. This API may change without notice, which could break the script.
+* This script relies on an unofficial API endpoint (`api-rijbewijs.sbat.be`) used by the SBAT booking system. This API may change without notice, which could break the script.
 * Use this script responsibly and ensure compliance with the SBAT website's terms of service.
 
 ---
@@ -61,7 +53,7 @@ bearer = YOUR_CACHED_TOKEN
 ## Nederlands
 
 ### Beschrijving
-Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api.rijbewijs.sbat.be`) voor beschikbare tijdsloten voor het praktijkexamen rijbewijs Type B (auto) in de regio Oost-Vlaanderen, België. Het monitort periodiek specifieke examencentra en geeft de gebruiker een melding via een systeembericht en consolebericht wanneer er nieuwe data beschikbaar komen.
+Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api-rijbewijs.sbat.be`) voor beschikbare tijdsloten voor het praktijkexamen rijbewijs Type B (auto) in de regio Oost-Vlaanderen, België. Het monitort periodiek specifieke examencentra en geeft de gebruiker een melding via een systeembericht en consolebericht wanneer er nieuwe data beschikbaar komen.
 
 ### Releases / Gecompileerde Versies
 Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn voorgecompileerde versies voor macOS en Windows beschikbaar.
@@ -72,8 +64,7 @@ Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn
 2.  **Uitvoeren:**
     * **Windows:** Dubbelklik op het `.exe`-bestand. U krijgt mogelijk een Windows SmartScreen-waarschuwing omdat de applicatie niet is ondertekend. Klik op "Meer informatie" en vervolgens op "Toch uitvoeren".
     * **macOS:** Dubbelklik op het bestand. U krijgt mogelijk een beveiligingswaarschuwing omdat de applicatie van een onbekende ontwikkelaar afkomstig is. Klik met de rechtermuisknop (of Control-klik) op het app-pictogram, kies "Open" en klik vervolgens op "Open" in het dialoogvenster. Dit hoeft u alleen de eerste keer te doen.
-3.  **Eerste gebruik:** Wanneer u het voor de eerste keer uitvoert, zoekt het naar `config.ini` in *dezelfde map*. Als het bestand niet wordt gevonden, wordt u gevraagd uw inloggegevens in te voeren en wordt het `config.ini`-bestand aangemaakt.
-4.  **Werking:** De applicatie draait op de achtergrond (opent waarschijnlijk een terminal/console-venster op Windows, of draait zonder zichtbaar venster na de eerste toestemming op macOS). Het toont systeemmeldingen wanneer nieuwe examen-slots worden gevonden. Om te stoppen, sluit u het terminal/console-venster of gebruikt u de Activiteitenweergave (macOS) / Taakbeheer (Windows) om het proces te beëindigen.
+3.  **Werking:** De applicatie draait op de achtergrond (opent waarschijnlijk een terminal/console-venster op Windows, of draait zonder zichtbaar venster na de eerste toestemming op macOS). Het toont systeemmeldingen wanneer nieuwe examen-slots worden gevonden. Om te stoppen, sluit u het terminal/console-venster of gebruikt u de Activiteitenweergave (macOS) / Taakbeheer (Windows) om het proces te beëindigen.
 
 ### Script gebruik (met devbox)
 1.  Installeer [devbox](https://www.jetify.com/devbox) als u dit nog niet heeft.
@@ -101,15 +92,8 @@ U kunt ook handmatig een Bearer-token invoeren:
 * CLI: `python3 sbat.py --token UW_BEARER_TOKEN`
 * GUI: Gebruik het "Paste Token"-veld
 
-Het token wordt opgeslagen in `config.ini` en hergebruikt tot het verloopt.
-
-### Configuratie
-De applicatie gebruikt een `config.ini`-bestand in dezelfde map als het script. Het slaat een gecached Bearer-token op voor hergebruik:
-```ini
-[Token]
-bearer = UW_GECACHED_TOKEN
-```
+Tokens worden alleen in het geheugen bewaard (~1 uur geldig) en worden niet op schijf opgeslagen.
 
 ### Disclaimer
-* Dit script maakt gebruik van een onofficieel API-eindpunt (`api.rijbewijs.sbat.be`) dat wordt gebruikt door het SBAT-boekingssysteem. Deze API kan zonder kennisgeving wijzigen, wat het script onbruikbaar kan maken.
+* Dit script maakt gebruik van een onofficieel API-eindpunt (`api-rijbewijs.sbat.be`) dat wordt gebruikt door het SBAT-boekingssysteem. Deze API kan zonder kennisgeving wijzigen, wat het script onbruikbaar kan maken.
 * Gebruik dit script op verantwoorde wijze en zorg ervoor dat u voldoet aan de gebruiksvoorwaarden van de SBAT-website.

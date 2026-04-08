@@ -4,74 +4,30 @@ Authentication module for SBAT exam checker.
 Supports two methods:
 1. Playwright-based browser auth (itsme OIDC flow)
 2. Manual token paste (fallback)
+
+Tokens are ~1 hour TTL so they are only kept in memory, not persisted to disk.
 """
 
-import configparser
-import os
-import sys
 import time
 
-from constants import CONFIG_FILENAME, SBAT_LOGIN_URL, AVAILABLE_URL
-
-
-def get_config_path():
-    if getattr(sys, "frozen", False):
-        base_path = os.path.dirname(sys.executable)
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, CONFIG_FILENAME)
-
-
-def load_cached_token():
-    """Load a previously cached Bearer token from config.ini."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-            return config.get("Token", "bearer", fallback=None)
-        except configparser.Error:
-            pass
-    return None
-
-
-def save_cached_token(token):
-    """Save a Bearer token to config.ini for reuse."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-        except configparser.Error:
-            config = configparser.ConfigParser()
-
-    if "Token" not in config:
-        config.add_section("Token")
-
-    config.set("Token", "bearer", token)
-
-    with open(config_file, "w") as f:
-        config.write(f)
+from constants import SBAT_LOGIN_URL, AVAILABLE_URL
 
 
 def test_token(token):
     """Test if a Bearer token is still valid by making a lightweight API request."""
     import requests
     from constants import CENTER_IDS, USER_AGENT
+    from datetime import datetime, timedelta
 
     headers = {
         "Content-Type": "application/json",
         "User-Agent": USER_AGENT,
         "Authorization": f"Bearer {token}",
     }
-    # Test with a single center
-    center_id = CENTER_IDS[0][0]
-    from datetime import datetime, timedelta
-
     payload = {
         "licenseType": "B",
         "examType": "E2",
-        "examCenterId": center_id,
+        "examCenterId": CENTER_IDS[0][0],
         "startDate": f"{(datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')}T00:00",
     }
     try:
@@ -86,8 +42,8 @@ def authenticate_with_browser(log_fn=None):
     Open a browser for itsme authentication and capture the Bearer token.
 
     Opens the SBAT login page in a visible Chromium browser. The user completes
-    the itsme OIDC flow on their phone. The script intercepts API requests to
-    capture the resulting Bearer token.
+    the itsme OIDC flow on their phone. The script intercepts the resulting
+    Bearer token from the callback URL or API request headers.
 
     Args:
         log_fn: Optional callback for log messages (e.g., gui_queue.put)
@@ -121,16 +77,30 @@ def authenticate_with_browser(log_fn=None):
             nonlocal captured_token
             if captured_token:
                 return
-            # Look for requests to the SBAT API that carry a Bearer token
-            auth_header = request.headers.get("authorization", "")
-            if (
-                "api.rijbewijs.sbat.be" in request.url
-                and auth_header.startswith("Bearer ")
-            ):
-                token = auth_header[len("Bearer "):]
-                if token:
-                    captured_token = token
-                    log("Bearer token captured successfully.")
+            url = request.url
+
+            # Method 1: Extract token from callback URL query parameter
+            # SBAT redirects to /callback?token=<JWT> after itsme auth
+            if "callback" in url and "token=" in url:
+                try:
+                    from urllib.parse import urlparse, parse_qs
+                    parsed = urlparse(url)
+                    token_values = parse_qs(parsed.query).get("token", [])
+                    if token_values:
+                        captured_token = token_values[0]
+                        log("Token captured from callback URL.")
+                        return
+                except Exception:
+                    pass
+
+            # Method 2: Intercept Bearer token from API request headers
+            if "rijbewijs" in url and "sbat" in url:
+                auth_header = request.headers.get("authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    token = auth_header[7:]  # Skip "bearer " (7 chars)
+                    if token:
+                        captured_token = token
+                        log("Token captured from request Authorization header.")
 
         page.on("request", on_request)
 
@@ -141,44 +111,13 @@ def authenticate_with_browser(log_fn=None):
         start = time.time()
         while not captured_token and time.time() - start < timeout:
             try:
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(1000)
             except Exception:
                 break
-
-        if not captured_token:
-            # Try to extract token from localStorage/sessionStorage as fallback
-            try:
-                for storage_fn in [
-                    "localStorage",
-                    "sessionStorage",
-                ]:
-                    result = page.evaluate(
-                        f"""() => {{
-                        const storage = window.{storage_fn};
-                        for (let i = 0; i < storage.length; i++) {{
-                            const key = storage.key(i);
-                            const val = storage.getItem(key);
-                            if (val && val.length > 20 && val.length < 2000) {{
-                                // Heuristic: tokens are typically long strings
-                                if (key.toLowerCase().includes('token') || key.toLowerCase().includes('auth') || key.toLowerCase().includes('bearer')) {{
-                                    return val;
-                                }}
-                            }}
-                        }}
-                        return null;
-                    }}"""
-                    )
-                    if result:
-                        captured_token = result.strip('"')
-                        log("Token found in browser storage.")
-                        break
-            except Exception:
-                pass
 
         browser.close()
 
     if captured_token:
-        save_cached_token(captured_token)
         return captured_token
     else:
         log("Authentication timed out. No token captured within 120 seconds.")
@@ -191,8 +130,7 @@ def get_token(manual_token=None, log_fn=None):
 
     Tries in order:
     1. Manual token (if provided via --token flag or paste)
-    2. Cached token from config.ini (if still valid)
-    3. Browser-based itsme authentication
+    2. Browser-based itsme authentication
 
     Args:
         manual_token: A manually provided Bearer token (optional)
@@ -207,24 +145,11 @@ def get_token(manual_token=None, log_fn=None):
         else:
             print(msg)
 
-    # 1. Manual token
     if manual_token:
         log("Using manually provided token...")
         if test_token(manual_token):
-            save_cached_token(manual_token)
             return manual_token
         else:
             log("Manually provided token is invalid or expired.")
 
-    # 2. Cached token
-    cached = load_cached_token()
-    if cached:
-        log("Testing cached token...")
-        if test_token(cached):
-            log("Cached token is still valid.")
-            return cached
-        else:
-            log("Cached token expired.")
-
-    # 3. Browser auth
     return authenticate_with_browser(log_fn=log_fn)

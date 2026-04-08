@@ -6,9 +6,9 @@
       ". $VENV_DIR/bin/activate"
     ],
     "scripts": {
-      "cli": ["python sbat.py"],
-      "gui": ["python sbat_gui_pyside.py"],
-      "gui-gtk": ["python sbat_gui_gtk.py"],
+      "cli": ["test -f .devbox/.pw-installed || (playwright install chromium && touch .devbox/.pw-installed); python sbat.py"],
+      "gui": ["test -f .devbox/.pw-installed || (playwright install chromium && touch .devbox/.pw-installed); python sbat_gui_pyside.py"],
+      "gui-gtk": ["test -f .devbox/.pw-installed || (playwright install chromium && touch .devbox/.pw-installed); python sbat_gui_gtk.py"],
       "setup": [
         "pip install -r requirements.txt && playwright install chromium"
       ]
