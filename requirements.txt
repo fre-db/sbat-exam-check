@@ -1,6 +1,4 @@
 requests
 pytz
 playwright
-PyGObject
-Pycairo
 pyside6

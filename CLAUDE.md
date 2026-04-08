@@ -6,7 +6,7 @@ Monitors Belgian SBAT driving exam booking system for available Type B (car) pra
 ## Tech Stack
 - **Language:** Python 3
 - **HTTP:** requests
-- **GUI:** PySide6 (macOS/Windows), GTK3 via PyGObject (Linux)
+- **GUI:** PySide6 (cross-platform)
 - **Auth:** Playwright (browser-based itsme OIDC authentication)
 - **Timezone:** pytz (Europe/Brussels)
 - **Packaging:** PyInstaller (sbat_checker_qt.spec)
@@ -16,8 +16,7 @@ Monitors Belgian SBAT driving exam booking system for available Type B (car) pra
 constants.py        — Shared API URLs, exam center IDs, payload templates
 auth.py             — Authentication module (Playwright itsme + manual token fallback)
 sbat.py             — CLI version (headless polling loop)
-sbat_gui_pyside.py  — PySide6/Qt GUI (macOS/Windows)
-sbat_gui_gtk.py     — GTK3 GUI (Linux)
+sbat_gui_pyside.py  — PySide6/Qt GUI (cross-platform)
 ```
 
 ## Authentication Flow
@@ -47,8 +46,7 @@ python sbat.py
 python sbat.py --token <bearer-token>  # manual token
 
 # GUI
-python sbat_gui_pyside.py   # macOS/Windows
-python sbat_gui_gtk.py       # Linux
+python sbat_gui_pyside.py
 
 # First run: install Playwright browser
 playwright install chromium

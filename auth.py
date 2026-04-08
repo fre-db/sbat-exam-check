@@ -69,7 +69,12 @@ def authenticate_with_browser(log_fn=None):
     log("Please confirm your identity in the itsme app on your phone.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # Try system Chrome first (no need for playwright install chromium),
+        # fall back to Playwright's bundled Chromium
+        try:
+            browser = p.chromium.launch(headless=False, channel="chrome")
+        except Exception:
+            browser = p.chromium.launch(headless=False)
         context = browser.new_context()
         page = context.new_page()
 

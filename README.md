@@ -21,16 +21,14 @@ For users who prefer not to install Python or manage dependencies, pre-compiled 
 2.  Run `devbox run setup` to install Python dependencies and the Playwright browser.
 3.  Run one of the scripts:
     * `devbox run cli` (CLI)
-    * `devbox run gui` (MacOS/Windows GUI)
-    * `devbox run gui-gtk` (Linux GUI)
+    * `devbox run gui` (GUI)
 
 ### Script usage (manual)
 1.  Ensure you have Python 3 and the required libraries installed (`pip install -r requirements.txt`).
 2.  Install the Playwright browser: `playwright install chromium`
 3.  Run one of the scripts from your terminal:
-    * `python3 sbat.py`
-    * `python3 sbat_gui_pyside.py` (MacOS/Windows)
-    * `python3 sbat_gui_gtk.py` (Linux)
+    * `python3 sbat.py` (CLI)
+    * `python3 sbat_gui_pyside.py` (GUI)
 
 ### Authentication
 SBAT uses Belgium's **itsme** app for authentication. When you start the application:
@@ -71,16 +69,14 @@ Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn
 2.  Voer `devbox run setup` uit om Python-afhankelijkheden en de Playwright-browser te installeren.
 3.  Voer een van de scripts uit:
     * `devbox run cli` (CLI)
-    * `devbox run gui` (MacOS/Windows GUI)
-    * `devbox run gui-gtk` (Linux GUI)
+    * `devbox run gui` (GUI)
 
 ### Script gebruik (manueel)
 1.  Zorg ervoor dat Python 3 en de vereiste bibliotheken zijn geïnstalleerd (`pip install -r requirements.txt`).
 2.  Installeer de Playwright-browser: `playwright install chromium`
 3.  Voer een van de scripts uit vanaf uw terminal:
-    * `python3 sbat.py`
-    * `python3 sbat_gui_pyside.py` (MacOS/Windows)
-    * `python3 sbat_gui_gtk.py` (Linux)
+    * `python3 sbat.py` (CLI)
+    * `python3 sbat_gui_pyside.py` (GUI)
 
 ### Authenticatie
 SBAT gebruikt de Belgische **itsme**-app voor authenticatie. Wanneer u de applicatie start:
