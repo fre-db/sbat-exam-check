@@ -1,5 +1,4 @@
 requests
 pytz
-PyGObject
-Pycairo
+playwright
 pyside6

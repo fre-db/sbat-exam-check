@@ -1,12 +1,12 @@
 # sbat_gui_qt.py
 import requests
 import pytz
-import configparser
-import os
 import sys
 import threading
 import queue  # For thread-safe communication
 from constants import *
+from auth import AuthSession, test_token
+from datetime import timezone
 
 # --- PySide6 Imports ---
 from PySide6.QtWidgets import (
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
     QVBoxLayout,
-    QGridLayout,
+    QHBoxLayout,
     QGroupBox,
     QLabel,
     QLineEdit,
@@ -31,73 +31,16 @@ from PySide6.QtGui import QTextCursor, QFont  # Import QFont
 checking_thread = None
 stop_event = threading.Event()
 auth_token = None
+auth_session = None  # Persistent AuthSession for itsme (enables silent refresh)
 all_dates_seen = set()
 previous_dates = set()
 gui_queue = queue.Queue()  # Queue for thread-safe GUI updates
 
 
-# --- Utility Functions (Mostly Unchanged) ---
-def get_config_path():
-    """Determines the correct path for the config.ini file."""
-    if getattr(sys, "frozen", False):
-        # If the application is run as a bundle, the PyInstaller bootloader
-        # extends the sys module by a flag frozen=True and sets the app
-        # path into variable _MEIPASS'.
-        base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    else:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, CONFIG_FILENAME)
-
-
+# --- Utility Functions ---
 def log_message(message):
     """Safely adds a message to the GUI log area from any thread via queue."""
     gui_queue.put(message)
-
-
-def load_credentials_from_config():
-    """Loads credentials from config.ini if it exists."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    username, password = "", ""
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-            username = config.get("Credentials", "username", fallback="")
-            password = config.get("Credentials", "password", fallback="")
-        except configparser.Error as e:
-            print(
-                f"[Config Load Error] {config_file}: {e}"
-            )  # Log to console before GUI starts
-    return {"username": username, "password": password}
-
-
-def save_credentials_to_config(username, password):
-    """Saves credentials to config.ini."""
-    config_file = get_config_path()
-    config = configparser.ConfigParser()
-    if os.path.exists(config_file):
-        try:
-            config.read(config_file)
-        except configparser.Error as e:
-            log_message(f"Warning: Could not read existing config before saving: {e}")
-            config = configparser.ConfigParser()
-
-    if "Credentials" not in config:
-        config.add_section("Credentials")
-
-    config.set("Credentials", "username", username)
-    config.set("Credentials", "password", password)
-
-    try:
-        with open(config_file, "w") as configfile:
-            config.write(configfile)
-        log_message(f"Credentials saved to '{config_file}'.")
-        return True
-    except IOError as e:
-        log_message(f"Error saving credentials to {config_file}: {e}")
-        # Show Qt error dialog (needs main window reference or call directly)
-        show_error_dialog_qt("File Error", f"Could not save credentials:\n{e}")
-        return False
 
 
 def get_sleep_time() -> int:
@@ -141,56 +84,15 @@ def show_info_dialog_qt(title, message, parent=None):
     msg_box.exec()
 
 
-# --- API Interaction (Unchanged) ---
-def attempt_authentication(username, password):
-    """Attempts to authenticate and returns the token or None."""
-    global auth_token
-    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-    credentials = {"username": username, "password": password}
-    log_message("Attempting authentication...")
-    try:
-        response = requests.post(
-            AUTH_URL, json=credentials, headers=headers, timeout=15
-        )
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-
-        if response.text:  # Check if response body is not empty
-            log_message("Authentication successful.")
-            auth_token = response.text.strip('"')  # Remove potential quotes
-            return auth_token
-        else:
-            log_message(
-                f"Authentication failed. Status: {response.status_code}, Empty Response Body"
-            )
-            auth_token = None
-            return None
-
-    except requests.exceptions.HTTPError as http_err:
-        log_message(
-            f"Authentication failed. Status: {http_err.response.status_code}, Response: {http_err.response.text[:200]}..."
-        )
-        auth_token = None
-        return None
-    except requests.exceptions.RequestException as e:
-        log_message(f"Network error during authentication: {e}")
-        auth_token = None
-        return None
-    except Exception as e:  # Catch other potential errors
-        log_message(f"An unexpected error occurred during authentication: {e}")
-        auth_token = None
-        return None
-
-
-def run_checks(username, password):
+# --- API Interaction ---
+def run_checks():
     """The main checking loop running in the background thread."""
     global auth_token, all_dates_seen, previous_dates
 
-    # Initial authentication attempt within the thread
     if not auth_token:
-        if not attempt_authentication(username, password):
-            log_message("Initial authentication failed in thread. Stopping checks.")
-            gui_queue.put("STOPPED_AUTH_FAILURE")
-            return  # Stop the thread if initial auth fails
+        log_message("No valid token. Stopping checks.")
+        gui_queue.put("STOPPED_AUTH_FAILURE")
+        return
 
     headers = {
         "Content-Type": "application/json",
@@ -265,21 +167,9 @@ def run_checks(username, password):
             break  # Exit outer loop if stop is requested
 
         if auth_needed:
-            log_message("Attempting re-authentication...")
-            new_token = attempt_authentication(username, password)
-            if new_token:
-                auth_token = new_token  # Update global token
-                headers["Authorization"] = (
-                    f"Bearer {new_token}"  # Update headers for next cycle
-                )
-                log_message("Re-authentication successful. Continuing checks.")
-                # Optional: Add a short sleep before continuing to avoid hammering API
-                stop_event.wait(5)
-                continue  # Restart the check cycle immediately
-            else:
-                log_message("Re-authentication failed. Stopping checks.")
-                gui_queue.put("STOPPED_AUTH_FAILURE")
-                break  # Exit outer loop
+            log_message("Token expired. Please re-authenticate via itsme.")
+            gui_queue.put("NEEDS_REAUTH")
+            break
 
         # Process results only if the cycle didn't fail and wasn't interrupted for auth
         if not request_failed_in_cycle:
@@ -370,33 +260,46 @@ class SbatCheckerWindow(QMainWindow):
 
         self.main_layout = QVBoxLayout(self.central_widget)
 
-        # --- Credentials Group ---
-        cred_group = QGroupBox("Credentials")
-        cred_layout = QGridLayout(cred_group)  # Use QGridLayout for alignment
+        # --- Authentication Group ---
+        auth_group = QGroupBox("Authentication")
+        auth_layout = QVBoxLayout(auth_group)
 
-        user_label = QLabel("Username:")
-        self.user_entry = QLineEdit()
-        pass_label = QLabel("Password:")
-        self.pass_entry = QLineEdit()
-        self.pass_entry.setEchoMode(QLineEdit.EchoMode.Password)  # Mask password
+        # itsme login button
+        itsme_layout = QHBoxLayout()
+        self.itsme_button = QPushButton("Login with itsme")
+        self.itsme_button.clicked.connect(self.on_itsme_login)
+        self.itsme_button.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        self.auth_status_label = QLabel("")
+        itsme_layout.addWidget(self.itsme_button)
+        itsme_layout.addWidget(self.auth_status_label)
+        itsme_layout.addStretch()
+        auth_layout.addLayout(itsme_layout)
 
-        cred_layout.addWidget(user_label, 0, 0)
-        cred_layout.addWidget(self.user_entry, 0, 1)
-        cred_layout.addWidget(pass_label, 1, 0)
-        cred_layout.addWidget(self.pass_entry, 1, 1)
+        # Manual token paste fallback
+        token_layout = QHBoxLayout()
+        token_label = QLabel("Or paste token:")
+        self.token_entry = QLineEdit()
+        self.token_entry.setPlaceholderText("Bearer token from browser DevTools")
+        self.token_paste_button = QPushButton("Use Token")
+        self.token_paste_button.clicked.connect(self.on_paste_token)
+        token_layout.addWidget(token_label)
+        token_layout.addWidget(self.token_entry)
+        token_layout.addWidget(self.token_paste_button)
+        auth_layout.addLayout(token_layout)
 
-        self.main_layout.addWidget(cred_group)
+        self.main_layout.addWidget(auth_group)
 
         # --- Control Area ---
-        # Using a simple layout for just one button
-        self.start_stop_button = QPushButton("Start Checking")
-        self.start_stop_button.clicked.connect(self.on_start_stop_clicked)
-        # Make button take minimum horizontal space
-        self.start_stop_button.setSizePolicy(
+        self.check_button = QPushButton("Start Checking")
+        self.check_button.clicked.connect(self.on_check_button_clicked)
+        self.check_button.setEnabled(False)
+        self.check_button.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
         self.main_layout.addWidget(
-            self.start_stop_button, alignment=Qt.AlignmentFlag.AlignLeft
+            self.check_button, alignment=Qt.AlignmentFlag.AlignLeft
         )
 
         # --- Log Area ---
@@ -417,19 +320,17 @@ class SbatCheckerWindow(QMainWindow):
         self.main_layout.addWidget(log_group)
 
         # --- Initial Setup ---
-        initial_creds = load_credentials_from_config()
-        self.user_entry.setText(initial_creds.get("username", ""))
-        self.pass_entry.setText(initial_creds.get("password", ""))
-
-        if initial_creds.get("username"):
-            self.append_log("Credentials loaded from config.ini.")
-        else:
-            self.append_log("config.ini not found or empty. Please enter credentials.")
+        self.append_log("Please login with itsme or paste a token to start.")
 
         # --- Queue Timer ---
         self.queue_timer = QTimer(self)
         self.queue_timer.timeout.connect(self.process_gui_queue_qt)
         self.queue_timer.start(100)  # Check queue every 100ms
+
+        # --- Token Refresh Timer (fires once, before token expiry) ---
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setSingleShot(True)
+        self.refresh_timer.timeout.connect(self._on_refresh_timer)
 
     def append_log(self, message):
         """Appends a message to the Qt QTextEdit."""
@@ -439,182 +340,221 @@ class SbatCheckerWindow(QMainWindow):
         self.log_view.moveCursor(QTextCursor.MoveOperation.End)
         # self.log_view.ensureCursorVisible() # Alternative scrolling method
 
-    @Slot()  # Decorator to explicitly mark as a Qt slot
-    def process_gui_queue_qt(self):
-        """Processes messages from the queue to update the GUI."""
-        try:
-            while not gui_queue.empty():  # Check if queue is empty first
-                message = gui_queue.get_nowait()  # Use get_nowait
-                if message == "STOPPED_AUTH_FAILURE":
-                    self.append_log("Authentication failed. Controls reset.")
-                    self.reset_gui_controls()
-                elif message == "STOPPED_NORMAL":
-                    self.append_log("Checker stopped normally. Controls reset.")
-                    self.reset_gui_controls()
-                elif isinstance(message, tuple) and message[0] == "SHOW_INFO":
-                    show_info_dialog_qt("NEW DATES FOUND", message[1], parent=self)
-                elif isinstance(message, str):  # Log string messages
-                    self.append_log(message)
-                else:
-                    self.append_log(
-                        f"Received unexpected message type: {type(message)}"
-                    )
+    @Slot()
+    def on_itsme_login(self):
+        """Launch browser-based itsme authentication via persistent AuthSession."""
+        global auth_session
+        self.itsme_button.setEnabled(False)
+        self.auth_status_label.setText("Opening browser... Confirm on itsme app.")
+        self.append_log("Starting itsme authentication...")
+        # Close any existing session before starting a new one
+        if auth_session:
+            auth_session.close()
+        auth_session = AuthSession(log_fn=log_message)
+        threading.Thread(target=self._do_itsme_auth, daemon=True).start()
 
-        except queue.Empty:
-            pass  # No messages in the queue
+    def _do_itsme_auth(self):
+        """Run itsme browser auth in background thread."""
+        global auth_token, auth_session
+        token = auth_session.start()
+        if token:
+            auth_token = token
+            gui_queue.put("ITSME_AUTH_SUCCESS")
+        else:
+            gui_queue.put("ITSME_AUTH_FAILURE")
+
+    def _schedule_token_refresh(self):
+        """Schedule a silent token refresh ~5 minutes before the token expires."""
+        global auth_session
+        if not auth_session or not auth_session.token_expiry:
+            return
+        now_utc = datetime.now(timezone.utc)
+        seconds_until_expiry = (auth_session.token_expiry - now_utc).total_seconds()
+        refresh_in = max(0, seconds_until_expiry - 300)  # 5 min before expiry
+        self.refresh_timer.start(int(refresh_in * 1000))
+        self.append_log(
+            f"Token valid for {int(seconds_until_expiry / 60)} min. "
+            f"Silent refresh scheduled in {int(refresh_in / 60)} min."
+        )
 
     @Slot()
-    def on_start_stop_clicked(self):
-        """Handles the Start/Stop button click."""
-        if self.start_stop_button.text() == "Start Checking":
-            self.start_checking()
-        else:
-            self.stop_checking()
+    def _on_refresh_timer(self):
+        """Fired by the refresh timer — attempt silent token refresh."""
+        self.append_log("Refreshing token silently...")
+        threading.Thread(target=self._do_silent_refresh, daemon=True).start()
 
-    def start_checking(self):
-        global checking_thread, stop_event, auth_token, all_dates_seen, previous_dates
-
-        if checking_thread and checking_thread.is_alive():
-            self.append_log("Checker is already running.")
+    def _do_silent_refresh(self):
+        """Run silent token refresh in background thread."""
+        global auth_token, auth_session
+        if not auth_session:
             return
-
-        user = self.user_entry.text()
-        pwd = self.pass_entry.text()
-
-        if not user or not pwd:
-            show_error_dialog_qt(
-                "Input Required",
-                "Please enter both username and password.",
-                parent=self,
-            )
-            return
-
-        # Reset state variables
-        stop_event.clear()
-        auth_token = None  # Reset token before attempting auth
-        all_dates_seen = set()
-        previous_dates = set()
-
-        # Clear the log before starting a new check run
-        # self.log_view.clear() # Optional: uncomment to clear log on start
-
-        # Update GUI immediately to provide feedback
-        self.user_entry.setEnabled(False)
-        self.pass_entry.setEnabled(False)
-        self.start_stop_button.setText("Starting...")
-        self.start_stop_button.setEnabled(False)  # Disable button during initial auth
-        QApplication.processEvents()  # Process GUI events to show changes
-
-        # Perform initial authentication in a separate thread to avoid blocking GUI
-        auth_thread = threading.Thread(
-            target=self._initial_auth_and_start, args=(user, pwd), daemon=True
-        )
-        auth_thread.start()
-
-    def _initial_auth_and_start(self, user, pwd):
-        """Helper function to run initial auth in a thread."""
-        global checking_thread
-        token = attempt_authentication(user, pwd)
-
-        # Use queue to communicate result back to GUI thread
-        if token:
-            gui_queue.put(("AUTH_SUCCESS", user, pwd))
+        new_token = auth_session.refresh_token()
+        if new_token:
+            auth_token = new_token
+            gui_queue.put("TOKEN_REFRESHED")
         else:
-            gui_queue.put("AUTH_FAILURE")
+            gui_queue.put("NEEDS_REAUTH")
 
-    @Slot()  # Process messages from the auth thread
+    @Slot()
+    def on_paste_token(self):
+        """Handle manual token paste."""
+        global auth_token
+        token = self.token_entry.text().strip()
+        if not token:
+            show_error_dialog_qt("Input Required", "Please paste a Bearer token.", parent=self)
+            return
+        self.append_log("Testing pasted token...")
+        self.token_paste_button.setEnabled(False)
+        threading.Thread(target=self._test_pasted_token, args=(token,), daemon=True).start()
+
+    def _test_pasted_token(self, token):
+        """Test pasted token in background thread."""
+        global auth_token
+        if test_token(token):
+            auth_token = token
+            gui_queue.put("PASTE_TOKEN_VALID")
+        else:
+            gui_queue.put("PASTE_TOKEN_INVALID")
+
+    @Slot()
     def process_gui_queue_qt(self):
         """Processes messages from the queue to update the GUI."""
         try:
             while not gui_queue.empty():
                 message_data = gui_queue.get_nowait()
 
-                if (
-                    isinstance(message_data, tuple)
-                    and message_data[0] == "AUTH_SUCCESS"
-                ):
-                    _, user, pwd = message_data  # Unpack data
-                    self.append_log("Initial authentication successful.")
-                    save_credentials_to_config(user, pwd)  # Save credentials
+                if message_data == "CACHED_TOKEN_VALID":
+                    self.append_log("Cached token is valid. Auto-starting checks...")
+                    self.auth_status_label.setText("Authenticated (cached token)")
+                    self.start_checking()
 
-                    # Update GUI to 'running' state
-                    self.start_stop_button.setText("Stop Checking")
-                    self.start_stop_button.setEnabled(True)  # Re-enable button
+                elif message_data == "CACHED_TOKEN_INVALID":
+                    self.append_log("Cached token expired. Please re-authenticate.")
+                    self.auth_status_label.setText("")
 
-                    # Start the main checking thread
-                    checking_thread = threading.Thread(
-                        target=run_checks, args=(user, pwd), daemon=True
-                    )
-                    checking_thread.start()
+                elif message_data == "ITSME_AUTH_SUCCESS":
+                    self.append_log("itsme authentication successful! Starting checks...")
+                    self.auth_status_label.setText("Authenticated via itsme")
+                    self.start_checking()
+                    self._schedule_token_refresh()
 
-                elif message_data == "AUTH_FAILURE":
-                    self.append_log("Initial authentication failed.")
-                    show_error_dialog_qt(
-                        "Authentication Failed",
-                        "Could not authenticate. Check details and logs.",
-                        parent=self,
-                    )
-                    self.reset_gui_controls()  # Reset GUI back to initial state
+                elif message_data == "TOKEN_REFRESHED":
+                    self.append_log("Token refreshed silently.")
+                    self._schedule_token_refresh()
 
-                # --- Handle other messages ---
+                elif message_data == "ITSME_AUTH_FAILURE":
+                    self.append_log("itsme authentication failed or timed out.")
+                    self.auth_status_label.setText("Authentication failed")
+                    self.itsme_button.setEnabled(True)
+                    self.token_entry.setEnabled(True)
+                    self.token_paste_button.setEnabled(True)
+
+                elif message_data == "PASTE_TOKEN_VALID":
+                    self.append_log("Pasted token is valid. Starting checks...")
+                    self.auth_status_label.setText("Authenticated (pasted token)")
+                    self.start_checking()
+
+                elif message_data == "PASTE_TOKEN_INVALID":
+                    self.append_log("Pasted token is invalid or expired.")
+                    show_error_dialog_qt("Invalid Token", "The pasted token is not valid.", parent=self)
+                    self.token_paste_button.setEnabled(True)
+
+                elif message_data == "NEEDS_REAUTH":
+                    self.append_log("Token expired. Please re-authenticate via itsme to continue.")
+                    self.refresh_timer.stop()
+                    self.set_stopped_state(token_expired=True)
                 elif message_data == "STOPPED_AUTH_FAILURE":
-                    self.append_log(
-                        "Authentication failed during checks. Controls reset."
-                    )
-                    self.reset_gui_controls()
+                    self.append_log("Authentication failed. Please re-authenticate.")
+                    self.set_stopped_state(token_expired=True)
                 elif message_data == "STOPPED_NORMAL":
-                    self.append_log("Checker stopped normally. Controls reset.")
-                    self.reset_gui_controls()
+                    self.append_log("Checker stopped.")
+                    self.set_stopped_state(token_expired=False)
                 elif isinstance(message_data, tuple) and message_data[0] == "SHOW_INFO":
                     show_info_dialog_qt("NEW DATES FOUND", message_data[1], parent=self)
-                elif isinstance(message_data, str):  # Log string messages
+                elif isinstance(message_data, str):
                     self.append_log(message_data)
-                else:
-                    self.append_log(
-                        f"Received unexpected message type: {type(message_data)}"
-                    )
 
         except queue.Empty:
-            pass  # No messages in the queue
+            pass
+
+    @Slot()
+    def on_check_button_clicked(self):
+        if self.check_button.text() == "Stop Checking":
+            self.stop_checking()
+        else:
+            self.start_checking()
+
+    def start_checking(self):
+        global checking_thread, stop_event, all_dates_seen, previous_dates
+
+        if checking_thread and checking_thread.is_alive():
+            return
+
+        if not auth_token:
+            return
+
+        stop_event.clear()
+        all_dates_seen = set()
+        previous_dates = set()
+
+        self.itsme_button.setEnabled(False)
+        self.token_entry.setEnabled(False)
+        self.token_paste_button.setEnabled(False)
+        self.check_button.setText("Stop Checking")
+        self.check_button.setEnabled(True)
+
+        checking_thread = threading.Thread(target=run_checks, daemon=True)
+        checking_thread.start()
 
     def stop_checking(self):
         global checking_thread
         if checking_thread and checking_thread.is_alive():
             self.append_log("Stopping checker...")
             stop_event.set()
-            # The thread checks stop_event periodically and will exit.
-            # We reset GUI controls when the "STOPPED_NORMAL" message is received.
-            self.start_stop_button.setText("Stopping...")
-            self.start_stop_button.setEnabled(False)  # Disable while stopping
-        else:
-            self.append_log("Checker is not running.")
-            self.reset_gui_controls()  # Reset if already stopped
+            self.refresh_timer.stop()
+            self.check_button.setEnabled(False)
+            self.check_button.setText("Stopping...")
 
-    def reset_gui_controls(self):
-        """Resets the GUI controls to the 'stopped' state."""
-        self.user_entry.setEnabled(True)
-        self.pass_entry.setEnabled(True)
-        self.start_stop_button.setText("Start Checking")
-        self.start_stop_button.setEnabled(True)
-        # Logging is handled by the caller or queue message
+    def set_stopped_state(self, token_expired):
+        """Update GUI after checking stops."""
+        global auth_token
+
+        if token_expired:
+            auth_token = None
+            self.auth_status_label.setText("Token expired")
+            self.itsme_button.setEnabled(True)
+            self.token_entry.setEnabled(True)
+            self.token_paste_button.setEnabled(True)
+            self.check_button.setText("Start Checking")
+            self.check_button.setEnabled(False)
+        else:
+            self.itsme_button.setEnabled(True)
+            self.token_entry.setEnabled(True)
+            self.token_paste_button.setEnabled(True)
+            self.check_button.setText("Start Checking")
+            self.check_button.setEnabled(bool(auth_token))
 
     def closeEvent(self, event):
         """Handles window close event."""
-        global checking_thread
+        global checking_thread, auth_session
         self.append_log("Close requested.")
         if self.queue_timer:
-            self.queue_timer.stop()  # Stop the queue timer
+            self.queue_timer.stop()
+        self.refresh_timer.stop()
 
         if checking_thread and checking_thread.is_alive():
             self.append_log("Stopping checker thread...")
             stop_event.set()
-            # Give the thread a moment to stop - adjust timeout as needed
             checking_thread.join(timeout=1.5)
             if checking_thread.is_alive():
                 self.append_log("Warning: Checker thread did not stop gracefully.")
 
+        if auth_session:
+            auth_session.close()
+            auth_session = None
+
         self.append_log("Exiting application.")
-        event.accept()  # Accept the close event
+        event.accept()
 
 
 # --- Main Execution ---

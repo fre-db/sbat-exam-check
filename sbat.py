@@ -1,52 +1,13 @@
+import argparse
 import requests
 import time
 import pytz
 import subprocess
-import configparser
-import os
 import sys
 import platform
 
 from constants import *
-
-
-def get_credentials(write: bool = False):
-    config = configparser.ConfigParser()
-    if getattr(sys, "frozen", False):
-        #  If the script is frozen (e.g., packaged by PyInstaller)
-        config_file = os.path.join(os.path.dirname(sys.executable), "config.ini")
-    else:
-        #  If the script is run directly
-        config_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "config.ini"
-        )
-
-    if not os.path.exists(config_file):
-        print(f"Configuration file '{config_file}' not found. Creating a new one.")
-        config["Credentials"] = {}  # Create the section
-    else:
-        config.read(config_file)
-
-    if (
-        write
-        or "Credentials" not in config
-        or "username" not in config["Credentials"]
-        or "password" not in config["Credentials"]
-    ):
-        print("Credentials not found in configuration. Please enter them.")
-        config["Credentials"]["username"] = input("Enter your username: ")
-        config["Credentials"]["password"] = input("Enter your password: ")
-
-        with open(config_file, "w") as configfile:
-            config.write(configfile)
-        print(f"Credentials saved to '{config_file}'.")
-
-    return dict(config["Credentials"])
-
-
-url = "https://api.rijbewijs.sbat.be/praktijk/api/exam/available"
-auth_url = "https://api.rijbewijs.sbat.be/praktijk/api/user/authenticate"
-auth = get_credentials()
+from auth import get_token, AuthSession
 
 all_dates_seen = set()
 previous_dates = set()
@@ -101,60 +62,88 @@ def get_sleep_time() -> int:
     return 30 if hour_in_brussels in {7, 16} else 120
 
 
-def update_auth(headers: dict):
-    auth_response = requests.post(auth_url, json=auth, headers=headers)
-    if auth_response.status_code == 401:
-        print(
-            "Wrong username/password, update config.ini",
-            auth_response.status_code,
-            auth_response.text,
-        )
-        display_error(auth_response)
-        auth_response = requests.post(
-            auth_url, json=get_credentials(write=True), headers=headers
-        )
-    headers["Authorization"] = f"Bearer {auth_response.text}"
+def refresh_auth(headers: dict, session: AuthSession) -> bool:
+    """
+    Try silent token refresh via existing session, fall back to full browser re-auth.
+    Updates headers in-place. Returns True on success, False on failure.
+    """
+    print("Token expired. Attempting silent refresh...")
+    new_token = session.refresh_token()
+    if new_token:
+        print("Token refreshed silently.")
+        headers["Authorization"] = f"Bearer {new_token}"
+        return True
+
+    print("Silent refresh failed. Opening browser for re-authentication...")
+    new_token = session.start()
+    if new_token:
+        headers["Authorization"] = f"Bearer {new_token}"
+        return True
+
+    print("Re-authentication failed.")
+    return False
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SBAT Exam Slot Checker")
+    parser.add_argument("--token", help="Manually provide a Bearer token (skip browser auth)")
+    args = parser.parse_args()
+
+    # --token: manual flow, no AuthSession
+    session = None
+    if args.token:
+        token = get_token(manual_token=args.token)
+    else:
+        session = AuthSession()
+        token = session.start()
+
+    if not token:
+        print("Authentication failed. Exiting.")
+        if session:
+            session.close()
+        sys.exit(1)
+
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "curl/7.64.1",
+        "User-Agent": USER_AGENT,
+        "Authorization": f"Bearer {token}",
     }
-    update_auth(headers)
 
-    while True:
-        check_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        centers_available, new_dates = {}, set()
-        for id, center in CENTER_IDS:
-            PAYLOAD_BASE["examCenterId"] = id
-            response = requests.post(url, headers=headers, json=PAYLOAD_BASE)
-            if response.status_code != 200:
-                print(
-                    check_timestamp, "PROBLEM", response.status_code, response.content
-                )
-                update_auth(headers)
-                response = requests.post(url, headers=headers, json=PAYLOAD_BASE)
+    try:
+        while True:
+            check_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            centers_available, new_dates = {}, set()
+            for id, center in CENTER_IDS:
+                PAYLOAD_BASE["examCenterId"] = id
+                response = requests.post(AVAILABLE_URL, headers=headers, json=PAYLOAD_BASE)
 
-                if not response.status_code != 200:
-                    print(
-                        check_timestamp, "CRASH", response.status_code, response.content
-                    )
+                if response.status_code == 401:
+                    if session and refresh_auth(headers, session):
+                        response = requests.post(AVAILABLE_URL, headers=headers, json=PAYLOAD_BASE)
+                    else:
+                        print("Authentication failed. Exiting.")
+                        sys.exit(1)
+
+                if response.status_code != 200:
+                    print(check_timestamp, "PROBLEM", response.status_code, response.content)
                     display_error(response)
                     sys.exit(1)
 
-            if data := response.json():
-                centers_available[center] = data
-                new_dates = new_dates.union(
-                    {center + " " + slot.get("from", "")[:10] for slot in data}
-                )
+                if data := response.json():
+                    centers_available[center] = data
+                    new_dates = new_dates.union(
+                        {center + " " + slot.get("from", "")[:10] for slot in data}
+                    )
 
-        all_dates_seen = all_dates_seen.union(new_dates)
-        if centers_available and not new_dates.issubset(previous_dates):
-            previous_dates = new_dates
-            print(check_timestamp, centers_available.items())
-            display_dialog(centers_available)
-        else:
-            print(check_timestamp, "nothing new going on", all_dates_seen)
+            all_dates_seen = all_dates_seen.union(new_dates)
+            if centers_available and not new_dates.issubset(previous_dates):
+                previous_dates = new_dates
+                print(check_timestamp, centers_available.items())
+                display_dialog(centers_available)
+            else:
+                print(check_timestamp, "nothing new going on", all_dates_seen)
 
-        time.sleep(get_sleep_time())
+            time.sleep(get_sleep_time())
+    finally:
+        if session:
+            session.close()
