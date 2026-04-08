@@ -4,10 +4,15 @@ import sys
 import glob
 from PyInstaller.utils.hooks import get_package_paths
 
-# Get PySide6 base path
+# Get PySide6 shared libraries (platform-dependent)
 pyside6_dir = get_package_paths('PySide6')[0]
-dylib_files = glob.glob(os.path.join(pyside6_dir, '*.dylib'))
-qt_binaries = [(f, '.') for f in dylib_files]
+if sys.platform == 'darwin':
+    lib_files = glob.glob(os.path.join(pyside6_dir, '*.dylib'))
+elif sys.platform == 'win32':
+    lib_files = glob.glob(os.path.join(pyside6_dir, '*.dll'))
+else:
+    lib_files = glob.glob(os.path.join(pyside6_dir, '*.so'))
+qt_binaries = [(f, '.') for f in lib_files]
 
 # Get Playwright driver (Node + Playwright server)
 # Playwright uses system Chrome via channel="chrome", so no browser bundle needed
@@ -67,9 +72,12 @@ coll = COLLECT(
     upx_exclude=[],
     name='sbat_checker_qt',
 )
-app = BUNDLE(
-    coll,
-    name='sbat_checker_qt.app',
-    icon=None,
-    bundle_identifier=None,
-)
+
+# macOS .app bundle
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='sbat_checker_qt.app',
+        icon=None,
+        bundle_identifier=None,
+    )
