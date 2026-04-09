@@ -41,10 +41,10 @@ def _decode_jwt_exp(token):
     return None
 
 
-def _capture_token_from_request(request, log):
+def _capture_token_from_request(request):
     """
     Try to extract a Bearer token from a Playwright request.
-    Returns the token string or None.
+    Returns the token string or None. Caller is responsible for logging.
     """
     url = request.url
 
@@ -55,7 +55,6 @@ def _capture_token_from_request(request, log):
             parsed = urlparse(url)
             token_values = parse_qs(parsed.query).get("token", [])
             if token_values:
-                log("Token captured from callback URL.")
                 return token_values[0]
         except Exception:
             pass
@@ -66,7 +65,6 @@ def _capture_token_from_request(request, log):
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:]
             if token:
-                log("Token captured from request Authorization header.")
                 return token
 
     return None
@@ -208,17 +206,37 @@ class AuthSession:
         def on_request(request):
             if captured["token"]:
                 return
-            token = _capture_token_from_request(request, self._log)
+            token = _capture_token_from_request(request)
             if token and token != skip_token:
+                self._log("Token captured.")
                 captured["token"] = token
 
         page.on("request", on_request)
+        page.goto(SBAT_LOGIN_URL)
+
         if skip_token:
+            # Silent refresh: auto-click the itsme button so the IDP session
+            # completes the OIDC flow without requiring phone confirmation
             self._log("Navigating to login page for silent token refresh...")
+            try:
+                page.wait_for_load_state("networkidle", timeout=5000)
+                for selector in [
+                    'button:has-text("itsme")',
+                    'a:has-text("itsme")',
+                    '[class*="itsme"]',
+                    'text=itsme',
+                ]:
+                    try:
+                        page.click(selector, timeout=2000)
+                        self._log("Clicked itsme login button.")
+                        break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
         else:
             self._log("Opening browser for itsme authentication...")
             self._log("Please confirm your identity in the itsme app on your phone.")
-        page.goto(SBAT_LOGIN_URL)
 
         start = time.time()
         while not captured["token"] and time.time() - start < timeout:
