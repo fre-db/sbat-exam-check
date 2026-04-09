@@ -439,7 +439,6 @@ class SbatCheckerWindow(QMainWindow):
                     self._schedule_token_refresh()
 
                 elif message_data == "TOKEN_REFRESHED":
-                    self.append_log("Token refreshed silently.")
                     self._schedule_token_refresh()
 
                 elif message_data == "ITSME_AUTH_FAILURE":

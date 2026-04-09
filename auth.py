@@ -179,7 +179,9 @@ class AuthSession:
 
                 if cmd == "refresh":
                     self._log("Attempting silent token refresh...")
-                    new_token = self._wait_for_token(page, timeout=30)
+                    new_token = self._wait_for_token(
+                        page, timeout=30, skip_token=self.token
+                    )
                     if new_token:
                         self.token = new_token
                         self.token_expiry = _decode_jwt_exp(new_token)
@@ -191,9 +193,14 @@ class AuthSession:
 
             browser.close()
 
-    def _wait_for_token(self, page, timeout):
+    def _wait_for_token(self, page, timeout, skip_token=None):
         """
         Navigate to the SBAT login URL and wait for a token to be captured.
+
+        skip_token: if set, ignore any captured token that matches this value.
+                    Used during refresh to avoid re-capturing the expiring token
+                    that the SBAT SPA sends in Authorization headers on page load.
+
         Returns the token string or None on timeout.
         """
         captured = {"token": None}
@@ -202,12 +209,15 @@ class AuthSession:
             if captured["token"]:
                 return
             token = _capture_token_from_request(request, self._log)
-            if token:
+            if token and token != skip_token:
                 captured["token"] = token
 
         page.on("request", on_request)
-        self._log("Opening browser for itsme authentication...")
-        self._log("Please confirm your identity in the itsme app on your phone.")
+        if skip_token:
+            self._log("Navigating to login page for silent token refresh...")
+        else:
+            self._log("Opening browser for itsme authentication...")
+            self._log("Please confirm your identity in the itsme app on your phone.")
         page.goto(SBAT_LOGIN_URL)
 
         start = time.time()
