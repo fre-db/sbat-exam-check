@@ -94,14 +94,14 @@ def run_checks():
         gui_queue.put("STOPPED_AUTH_FAILURE")
         return
 
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "Authorization": f"Bearer {auth_token}",
-    }
-
     log_message("Starting SBAT exam check loop...")
     while not stop_event.is_set():
+        # Rebuild headers each cycle so a silently refreshed token is picked up
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "Authorization": f"Bearer {auth_token}",
+        }
         centers_with_new_data = {}
         current_run_dates = set()
         request_failed_in_cycle = False
