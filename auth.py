@@ -113,15 +113,16 @@ class AuthSession:
 
     def refresh_token(self):
         """
-        Silently refresh the token by navigating the existing browser page back
-        to the SBAT login URL. Relies on itsme session cookies being preserved.
-        Blocks until a new token is captured or timeout (30s).
+        Silently refresh the token by clearing localStorage and navigating to the
+        app, which causes the SPA to redirect to login. Relies on itsme session
+        cookies being preserved in the browser context.
+        Blocks until a new token is captured or timeout (60s).
         Returns the new token string, or None if silent refresh failed.
         """
         result = {"token": None}
         done = threading.Event()
         self._command_queue.put(("refresh", result, done))
-        done.wait(timeout=35)  # Slightly longer than the 30s internal timeout
+        done.wait(timeout=65)  # 5s buffer over the 60s internal timeout
         return result["token"]
 
     def close(self):
@@ -176,9 +177,8 @@ class AuthSession:
                     break
 
                 if cmd == "refresh":
-                    self._log("Attempting silent token refresh...")
                     new_token = self._wait_for_token(
-                        page, timeout=30, skip_token=self.token
+                        page, timeout=60, skip_token=self.token
                     )
                     if new_token:
                         self.token = new_token
@@ -193,11 +193,17 @@ class AuthSession:
 
     def _wait_for_token(self, page, timeout, skip_token=None):
         """
-        Navigate to the SBAT login URL and wait for a token to be captured.
+        Navigate to the SBAT app and wait for a token to be captured.
 
         skip_token: if set, ignore any captured token that matches this value.
                     Used during refresh to avoid re-capturing the expiring token
                     that the SBAT SPA sends in Authorization headers on page load.
+
+        For silent refresh: clears localStorage so the SPA detects no token and
+        redirects itself to the login route, then checks the privacy policy
+        checkbox and clicks the itsme button. The itsme IDP session cookies
+        are preserved in the browser context, so OIDC completes without phone
+        confirmation and the new token arrives via the callback URL.
 
         Returns the token string or None on timeout.
         """
@@ -212,31 +218,28 @@ class AuthSession:
                 captured["token"] = token
 
         page.on("request", on_request)
-        page.goto(SBAT_LOGIN_URL)
 
         if skip_token:
-            # Silent refresh: auto-click the itsme button so the IDP session
-            # completes the OIDC flow without requiring phone confirmation
-            self._log("Navigating to login page for silent token refresh...")
+            self._log("Attempting silent token refresh...")
+            # Clear localStorage so the SPA detects no token and redirects to login
+            page.evaluate("localStorage.clear()")
+            page.goto("https://rijbewijs.sbat.be/praktijk/examen/overview")
+            self._log(f"[diag] landed on: {page.url}")
             try:
                 page.wait_for_load_state("networkidle", timeout=5000)
-                for selector in [
-                    'button:has-text("itsme")',
-                    'a:has-text("itsme")',
-                    '[class*="itsme"]',
-                    'text=itsme',
-                ]:
-                    try:
-                        page.click(selector, timeout=2000)
-                        self._log("Clicked itsme login button.")
-                        break
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+            except Exception as e:
+                self._log(f"[diag] networkidle: {e}")
+            try:
+                page.click('label:has-text("privacybeleid")', timeout=5000)
+                self._log("Checked privacy policy checkbox.")
+                page.click('div.btn', timeout=5000)
+                self._log("Clicked itsme login button.")
+            except Exception as e:
+                self._log(f"[diag] Login interaction failed: {e}")
         else:
             self._log("Opening browser for itsme authentication...")
             self._log("Please confirm your identity in the itsme app on your phone.")
+            page.goto(SBAT_LOGIN_URL)
 
         start = time.time()
         while not captured["token"] and time.time() - start < timeout:
