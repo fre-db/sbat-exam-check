@@ -219,36 +219,48 @@ class AuthSession:
 
         page.on("request", on_request)
 
-        if skip_token:
-            self._log("Attempting silent token refresh...")
-            # Clear localStorage so the SPA detects no token and redirects to login
-            page.evaluate("localStorage.clear()")
-            page.goto("https://rijbewijs.sbat.be/praktijk/examen/overview")
-            self._log(f"[diag] landed on: {page.url}")
-            try:
-                page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception as e:
-                self._log(f"[diag] networkidle: {e}")
-            try:
-                page.click('label:has-text("privacybeleid")', timeout=5000)
-                self._log("Checked privacy policy checkbox.")
-                page.click('div.btn', timeout=5000)
-                self._log("Clicked itsme login button.")
-            except Exception as e:
-                self._log(f"[diag] Login interaction failed: {e}")
-        else:
-            self._log("Opening browser for itsme authentication...")
-            self._log("Please confirm your identity in the itsme app on your phone.")
-            page.goto(SBAT_LOGIN_URL)
+        try:
+            if skip_token:
+                self._log("Attempting silent token refresh...")
+                # Clear localStorage so the SPA detects no token and redirects to login
+                page.evaluate("localStorage.clear()")
+                page.goto("https://rijbewijs.sbat.be/praktijk/examen/overview")
+                self._log(f"[diag] landed on: {page.url}")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception as e:
+                    self._log(f"[diag] networkidle: {e}")
+                try:
+                    page.click('label:has-text("privacybeleid")', timeout=5000)
+                    self._log("Checked privacy policy checkbox.")
+                    page.click('div.btn', timeout=5000)
+                    self._log("Clicked itsme login button.")
+                except Exception as e:
+                    self._log(f"[diag] Login interaction failed: {e}")
 
-        start = time.time()
-        while not captured["token"] and time.time() - start < timeout:
-            try:
-                page.wait_for_timeout(500)
-            except Exception:
-                break
+                if not captured["token"]:
+                    # Wait a few seconds to see where the itsme redirect lands.
+                    # If still on itsme.be after this, the IDP session expired and
+                    # phone confirmation is required — fail fast instead of waiting 60s.
+                    page.wait_for_timeout(5000)
+                    post_click_url = page.url
+                    self._log(f"[diag] post-click URL: {post_click_url}")
+                    if "itsme.be" in post_click_url:
+                        self._log("itsme session expired. Phone confirmation required — silent refresh not possible.")
+                        return None
+            else:
+                self._log("Opening browser for itsme authentication...")
+                self._log("Please confirm your identity in the itsme app on your phone.")
+                page.goto(SBAT_LOGIN_URL)
 
-        page.remove_listener("request", on_request)
+            start = time.time()
+            while not captured["token"] and time.time() - start < timeout:
+                try:
+                    page.wait_for_timeout(500)
+                except Exception:
+                    break
+        finally:
+            page.remove_listener("request", on_request)
 
         if not captured["token"]:
             self._log(f"Authentication timed out after {timeout}s.")
