@@ -258,7 +258,7 @@ class AuthSession:
                     page.wait_for_timeout(5000)
                     post_click_url = page.url
                     self._log(f"[diag] post-click URL: {post_click_url}")
-                    if "itsme.be" in post_click_url:
+                    if "itsme.services" in post_click_url:
                         self._log("itsme session expired. Phone confirmation required — silent refresh not possible.")
                         return None
             else:

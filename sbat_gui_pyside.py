@@ -364,13 +364,19 @@ class SbatCheckerWindow(QMainWindow):
             gui_queue.put("ITSME_AUTH_FAILURE")
 
     def _schedule_token_refresh(self):
-        """Schedule a silent token refresh ~5 minutes before the token expires."""
+        """Schedule a silent token refresh 30 minutes before the token expires.
+
+        Refreshing at T-30min ensures the itsme IDP session (also ~1h TTL) is
+        still active. A successful refresh renews the itsme session too, so the
+        next refresh will again find a valid session — the chain continues
+        indefinitely without requiring phone confirmation.
+        """
         global auth_session
         if not auth_session or not auth_session.token_expiry:
             return
         now_utc = datetime.now(timezone.utc)
         seconds_until_expiry = (auth_session.token_expiry - now_utc).total_seconds()
-        refresh_in = max(0, seconds_until_expiry - 300)  # 5 min before expiry
+        refresh_in = max(0, seconds_until_expiry - 1800)  # 30 min before expiry
         self.refresh_timer.start(int(refresh_in * 1000))
         self.append_log(
             f"Token valid for {int(seconds_until_expiry / 60)} min. "
