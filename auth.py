@@ -166,6 +166,19 @@ class AuthSession:
                 browser.close()
                 return
 
+            # Minimize the browser window so it doesn't steal focus during
+            # silent refresh navigations (macOS brings Chrome to the front on
+            # page.goto, which buries the Qt GUI).
+            try:
+                cdp = context.new_cdp_session(page)
+                window_info = cdp.send("Browser.getWindowForTarget")
+                cdp.send("Browser.setWindowBounds", {
+                    "windowId": window_info["windowId"],
+                    "bounds": {"windowState": "minimized"},
+                })
+            except Exception:
+                pass  # Window management is best-effort
+
             # --- Command loop: process refresh/close requests ---
             while True:
                 try:
