@@ -408,11 +408,6 @@ class SbatCheckerWindow(QMainWindow):
                 )
             except Exception:
                 pass
-            # Spoken alert — hard to miss regardless of notification settings
-            try:
-                subprocess.Popen(["say", "S-BAT re-authentication needed"])
-            except Exception:
-                pass
         elif system == "Windows":
             try:
                 import ctypes
