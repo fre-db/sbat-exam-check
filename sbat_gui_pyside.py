@@ -398,6 +398,7 @@ class SbatCheckerWindow(QMainWindow):
         import platform
         system = platform.system()
         if system == "Darwin":
+            # Notification Center banner (may be missed if DND is on)
             try:
                 subprocess.run(
                     ["osascript", "-e",
@@ -407,6 +408,11 @@ class SbatCheckerWindow(QMainWindow):
                 )
             except Exception:
                 pass
+            # Spoken alert — hard to miss regardless of notification settings
+            try:
+                subprocess.Popen(["say", "S-BAT re-authentication needed"])
+            except Exception:
+                pass
         elif system == "Windows":
             try:
                 import ctypes
@@ -414,6 +420,8 @@ class SbatCheckerWindow(QMainWindow):
                 ctypes.windll.user32.FlashWindow(hwnd, True)
             except Exception:
                 pass
+        # Bounce the Dock icon (macOS) / flash taskbar (Windows) until activated
+        QApplication.alert(self, 0)  # 0 = keep bouncing until window is activated
         self.showNormal()
         self.raise_()
         self.activateWindow()
