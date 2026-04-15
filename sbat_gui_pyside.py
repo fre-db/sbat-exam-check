@@ -320,7 +320,7 @@ class SbatCheckerWindow(QMainWindow):
         self.main_layout.addWidget(log_group)
 
         # --- Initial Setup ---
-        self.append_log("Please login with itsme or paste a token to start.")
+        self.append_log("Launching itsme authentication...")
 
         # --- Queue Timer ---
         self.queue_timer = QTimer(self)
@@ -331,6 +331,9 @@ class SbatCheckerWindow(QMainWindow):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.timeout.connect(self._on_refresh_timer)
+
+        # Auto-start itsme authentication so the user doesn't need to click
+        QTimer.singleShot(200, self.on_itsme_login)
 
     def append_log(self, message):
         """Appends a message to the Qt QTextEdit."""
@@ -350,7 +353,7 @@ class SbatCheckerWindow(QMainWindow):
         # Close any existing session before starting a new one
         if auth_session:
             auth_session.close()
-        auth_session = AuthSession(log_fn=log_message)
+        auth_session = AuthSession(log_fn=log_message, event_fn=gui_queue.put)
         threading.Thread(target=self._do_itsme_auth, daemon=True).start()
 
     def _do_itsme_auth(self):
@@ -388,6 +391,32 @@ class SbatCheckerWindow(QMainWindow):
         """Fired by the refresh timer — attempt silent token refresh."""
         self.append_log("Refreshing token silently...")
         threading.Thread(target=self._do_silent_refresh, daemon=True).start()
+
+    def _notify_reauth_needed(self):
+        """Send an OS-level notification and bring the window to front."""
+        import subprocess
+        import platform
+        system = platform.system()
+        if system == "Darwin":
+            try:
+                subprocess.run(
+                    ["osascript", "-e",
+                     'display notification "Please confirm your identity in the itsme app." '
+                     'with title "SBAT: Re-authentication needed" sound name "Ping"'],
+                    check=False,
+                )
+            except Exception:
+                pass
+        elif system == "Windows":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                ctypes.windll.user32.FlashWindow(hwnd, True)
+            except Exception:
+                pass
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _do_silent_refresh(self):
         """Run token refresh in background thread.
@@ -479,6 +508,9 @@ class SbatCheckerWindow(QMainWindow):
                     self.append_log("Pasted token is invalid or expired.")
                     show_error_dialog_qt("Invalid Token", "The pasted token is not valid.", parent=self)
                     self.token_paste_button.setEnabled(True)
+
+                elif message_data == "REAUTH_NEEDED":
+                    self._notify_reauth_needed()
 
                 elif message_data == "NEEDS_REAUTH":
                     self.append_log("Token expired. Please re-authenticate via itsme to continue.")

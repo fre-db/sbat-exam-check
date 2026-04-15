@@ -83,8 +83,9 @@ class AuthSession:
     sync API must be used from a single thread).
     """
 
-    def __init__(self, log_fn=None):
+    def __init__(self, log_fn=None, event_fn=None):
         self._log_fn = log_fn
+        self._event_fn = event_fn
         self._command_queue = queue.Queue()
         self._thread = None
         self.token = None
@@ -96,6 +97,10 @@ class AuthSession:
             self._log_fn(msg)
         else:
             print(msg)
+
+    def _emit_event(self, event):
+        if self._event_fn:
+            self._event_fn(event)
 
     def start(self):
         """
@@ -212,6 +217,7 @@ class AuthSession:
                             "Silent refresh failed. "
                             "Please confirm itsme on your phone to re-authenticate..."
                         )
+                        self._emit_event("REAUTH_NEEDED")
                         self._set_window_state(context, page, "normal")
                         new_token = self._wait_for_token(page, timeout=120)
                         if new_token:
