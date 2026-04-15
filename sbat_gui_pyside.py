@@ -95,7 +95,6 @@ def run_checks():
         return
 
     log_message("Starting SBAT exam check loop...")
-    _logged_response_headers = False
     while not stop_event.is_set():
         # Rebuild headers each cycle so a silently refreshed token is picked up
         headers = {
@@ -125,9 +124,6 @@ def run_checks():
                 )
 
                 if response.status_code == 200:
-                    if not _logged_response_headers:
-                        _logged_response_headers = True
-                        log_message(f"[diag] API response headers: {dict(response.headers)}")
                     if data := response.json():
                         center_dates = {
                             # Use YYYY-MM-DD format consistently
