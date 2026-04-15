@@ -390,14 +390,24 @@ class SbatCheckerWindow(QMainWindow):
         threading.Thread(target=self._do_silent_refresh, daemon=True).start()
 
     def _do_silent_refresh(self):
-        """Run silent token refresh in background thread."""
+        """Run token refresh in background thread.
+
+        Tries silent refresh first. If the itsme session has expired,
+        auth_session automatically restores the browser window and waits for
+        the user to confirm on their phone (handled inside refresh_token()).
+        Sends REAUTH_COMPLETED so the GUI can resume checking without a
+        manual restart.
+        """
         global auth_token, auth_session
         if not auth_session:
             return
         new_token = auth_session.refresh_token()
         if new_token:
             auth_token = new_token
-            gui_queue.put("TOKEN_REFRESHED")
+            if auth_session.last_refresh_was_reauth:
+                gui_queue.put("REAUTH_COMPLETED")
+            else:
+                gui_queue.put("TOKEN_REFRESHED")
         else:
             gui_queue.put("NEEDS_REAUTH")
 
@@ -446,6 +456,12 @@ class SbatCheckerWindow(QMainWindow):
 
                 elif message_data == "TOKEN_REFRESHED":
                     self._schedule_token_refresh()
+
+                elif message_data == "REAUTH_COMPLETED":
+                    self.append_log("Re-authenticated via itsme. Resuming checks...")
+                    self.auth_status_label.setText("Authenticated via itsme")
+                    self._schedule_token_refresh()
+                    self.start_checking()  # Resume if the checking loop had stopped
 
                 elif message_data == "ITSME_AUTH_FAILURE":
                     self.append_log("itsme authentication failed or timed out.")

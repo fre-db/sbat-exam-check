@@ -89,6 +89,7 @@ class AuthSession:
         self._thread = None
         self.token = None
         self.token_expiry = None  # UTC datetime
+        self.last_refresh_was_reauth = False  # True when fallback re-auth was used
 
     def _log(self, msg):
         if self._log_fn:
@@ -113,17 +114,30 @@ class AuthSession:
 
     def refresh_token(self):
         """
-        Silently refresh the token by clearing localStorage and navigating to the
-        app, which causes the SPA to redirect to login. Relies on itsme session
-        cookies being preserved in the browser context.
-        Blocks until a new token is captured or timeout (60s).
-        Returns the new token string, or None if silent refresh failed.
+        Refresh the token. Attempts silent refresh first; if the itsme session
+        has expired, automatically falls back to full re-auth (restores the
+        browser window and waits up to 120s for the user to confirm on their
+        phone). Sets last_refresh_was_reauth=True when the fallback was used.
+        Blocks until a token is captured or both paths time out.
+        Returns the new token string, or None on failure.
         """
         result = {"token": None}
         done = threading.Event()
         self._command_queue.put(("refresh", result, done))
-        done.wait(timeout=65)  # 5s buffer over the 60s internal timeout
+        done.wait(timeout=200)  # silent (~7s fast-fail) + re-auth (120s) + buffer
         return result["token"]
+
+    def _set_window_state(self, context, page, state):
+        """Set the browser window state via CDP. state: 'minimized' | 'normal'."""
+        try:
+            cdp = context.new_cdp_session(page)
+            winfo = cdp.send("Browser.getWindowForTarget")
+            cdp.send("Browser.setWindowBounds", {
+                "windowId": winfo["windowId"],
+                "bounds": {"windowState": state},
+            })
+        except Exception:
+            pass
 
     def close(self):
         """Clean up the browser and stop the Playwright thread."""
@@ -169,15 +183,7 @@ class AuthSession:
             # Minimize the browser window so it doesn't steal focus during
             # silent refresh navigations (macOS brings Chrome to the front on
             # page.goto, which buries the Qt GUI).
-            try:
-                cdp = context.new_cdp_session(page)
-                window_info = cdp.send("Browser.getWindowForTarget")
-                cdp.send("Browser.setWindowBounds", {
-                    "windowId": window_info["windowId"],
-                    "bounds": {"windowState": "minimized"},
-                })
-            except Exception:
-                pass  # Window management is best-effort
+            self._set_window_state(context, page, "minimized")
 
             # --- Command loop: process refresh/close requests ---
             while True:
@@ -190,6 +196,7 @@ class AuthSession:
                     break
 
                 if cmd == "refresh":
+                    self.last_refresh_was_reauth = False
                     new_token = self._wait_for_token(
                         page, timeout=60, skip_token=self.token
                     )
@@ -198,7 +205,23 @@ class AuthSession:
                         self.token_expiry = _decode_jwt_exp(new_token)
                         self._log("Token refreshed silently.")
                     else:
-                        self._log("Silent refresh failed. Re-authentication required.")
+                        # Silent refresh failed (itsme session expired).
+                        # Restore the browser window and wait for the user to
+                        # confirm itsme on their phone — no app restart needed.
+                        self._log(
+                            "Silent refresh failed. "
+                            "Please confirm itsme on your phone to re-authenticate..."
+                        )
+                        self._set_window_state(context, page, "normal")
+                        new_token = self._wait_for_token(page, timeout=120)
+                        if new_token:
+                            self.token = new_token
+                            self.token_expiry = _decode_jwt_exp(new_token)
+                            self.last_refresh_was_reauth = True
+                            self._log("Re-authenticated via itsme. Resuming.")
+                            self._set_window_state(context, page, "minimized")
+                        else:
+                            self._log("Re-authentication timed out.")
                     result["token"] = new_token
                     done.set()
 
