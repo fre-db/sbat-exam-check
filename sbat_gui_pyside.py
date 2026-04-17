@@ -94,14 +94,14 @@ def run_checks():
         gui_queue.put("STOPPED_AUTH_FAILURE")
         return
 
-    headers = {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        "Authorization": f"Bearer {auth_token}",
-    }
-
     log_message("Starting SBAT exam check loop...")
     while not stop_event.is_set():
+        # Rebuild headers each cycle so a silently refreshed token is picked up
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+            "Authorization": f"Bearer {auth_token}",
+        }
         centers_with_new_data = {}
         current_run_dates = set()
         request_failed_in_cycle = False
@@ -320,7 +320,7 @@ class SbatCheckerWindow(QMainWindow):
         self.main_layout.addWidget(log_group)
 
         # --- Initial Setup ---
-        self.append_log("Please login with itsme or paste a token to start.")
+        self.append_log("Launching itsme authentication...")
 
         # --- Queue Timer ---
         self.queue_timer = QTimer(self)
@@ -331,6 +331,9 @@ class SbatCheckerWindow(QMainWindow):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
         self.refresh_timer.timeout.connect(self._on_refresh_timer)
+
+        # Auto-start itsme authentication so the user doesn't need to click
+        QTimer.singleShot(200, self.on_itsme_login)
 
     def append_log(self, message):
         """Appends a message to the Qt QTextEdit."""
@@ -350,7 +353,7 @@ class SbatCheckerWindow(QMainWindow):
         # Close any existing session before starting a new one
         if auth_session:
             auth_session.close()
-        auth_session = AuthSession(log_fn=log_message)
+        auth_session = AuthSession(log_fn=log_message, event_fn=gui_queue.put)
         threading.Thread(target=self._do_itsme_auth, daemon=True).start()
 
     def _do_itsme_auth(self):
@@ -364,7 +367,15 @@ class SbatCheckerWindow(QMainWindow):
             gui_queue.put("ITSME_AUTH_FAILURE")
 
     def _schedule_token_refresh(self):
-        """Schedule a silent token refresh ~5 minutes before the token expires."""
+        """Schedule a silent token refresh 5 minutes before the token expires.
+
+        Token expiry is read from the JWT exp claim so timing is exact.
+        The itsme IDP session has a shorter idle timeout than the JWT TTL,
+        so silent refresh often falls back to full re-auth regardless of
+        how early we try. Refreshing at T-5min minimises how often the user
+        is interrupted while still leaving a small buffer before the token
+        actually expires.
+        """
         global auth_session
         if not auth_session or not auth_session.token_expiry:
             return
@@ -383,15 +394,54 @@ class SbatCheckerWindow(QMainWindow):
         self.append_log("Refreshing token silently...")
         threading.Thread(target=self._do_silent_refresh, daemon=True).start()
 
+    def _notify_reauth_needed(self):
+        """Send an OS-level notification and bring the window to front."""
+        import subprocess
+        import platform
+        system = platform.system()
+        if system == "Darwin":
+            # Notification Center banner (may be missed if DND is on)
+            try:
+                subprocess.run(
+                    ["osascript", "-e",
+                     'display notification "Please confirm your identity in the itsme app." '
+                     'with title "SBAT: Re-authentication needed" sound name "Ping"'],
+                    check=False,
+                )
+            except Exception:
+                pass
+        elif system == "Windows":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                ctypes.windll.user32.FlashWindow(hwnd, True)
+            except Exception:
+                pass
+        # Bounce the Dock icon (macOS) / flash taskbar (Windows) until activated
+        QApplication.alert(self, 0)  # 0 = keep bouncing until window is activated
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def _do_silent_refresh(self):
-        """Run silent token refresh in background thread."""
+        """Run token refresh in background thread.
+
+        Tries silent refresh first. If the itsme session has expired,
+        auth_session automatically restores the browser window and waits for
+        the user to confirm on their phone (handled inside refresh_token()).
+        Sends REAUTH_COMPLETED so the GUI can resume checking without a
+        manual restart.
+        """
         global auth_token, auth_session
         if not auth_session:
             return
         new_token = auth_session.refresh_token()
         if new_token:
             auth_token = new_token
-            gui_queue.put("TOKEN_REFRESHED")
+            if auth_session.last_refresh_was_reauth:
+                gui_queue.put("REAUTH_COMPLETED")
+            else:
+                gui_queue.put("TOKEN_REFRESHED")
         else:
             gui_queue.put("NEEDS_REAUTH")
 
@@ -439,8 +489,13 @@ class SbatCheckerWindow(QMainWindow):
                     self._schedule_token_refresh()
 
                 elif message_data == "TOKEN_REFRESHED":
-                    self.append_log("Token refreshed silently.")
                     self._schedule_token_refresh()
+
+                elif message_data == "REAUTH_COMPLETED":
+                    self.append_log("Re-authenticated via itsme. Resuming checks...")
+                    self.auth_status_label.setText("Authenticated via itsme")
+                    self._schedule_token_refresh()
+                    self.start_checking()  # Resume if the checking loop had stopped
 
                 elif message_data == "ITSME_AUTH_FAILURE":
                     self.append_log("itsme authentication failed or timed out.")
@@ -458,6 +513,9 @@ class SbatCheckerWindow(QMainWindow):
                     self.append_log("Pasted token is invalid or expired.")
                     show_error_dialog_qt("Invalid Token", "The pasted token is not valid.", parent=self)
                     self.token_paste_button.setEnabled(True)
+
+                elif message_data == "REAUTH_NEEDED":
+                    self._notify_reauth_needed()
 
                 elif message_data == "NEEDS_REAUTH":
                     self.append_log("Token expired. Please re-authenticate via itsme to continue.")

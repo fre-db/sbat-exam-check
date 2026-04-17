@@ -41,10 +41,10 @@ def _decode_jwt_exp(token):
     return None
 
 
-def _capture_token_from_request(request, log):
+def _capture_token_from_request(request):
     """
     Try to extract a Bearer token from a Playwright request.
-    Returns the token string or None.
+    Returns the token string or None. Caller is responsible for logging.
     """
     url = request.url
 
@@ -55,7 +55,6 @@ def _capture_token_from_request(request, log):
             parsed = urlparse(url)
             token_values = parse_qs(parsed.query).get("token", [])
             if token_values:
-                log("Token captured from callback URL.")
                 return token_values[0]
         except Exception:
             pass
@@ -66,7 +65,6 @@ def _capture_token_from_request(request, log):
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:]
             if token:
-                log("Token captured from request Authorization header.")
                 return token
 
     return None
@@ -85,18 +83,24 @@ class AuthSession:
     sync API must be used from a single thread).
     """
 
-    def __init__(self, log_fn=None):
+    def __init__(self, log_fn=None, event_fn=None):
         self._log_fn = log_fn
+        self._event_fn = event_fn
         self._command_queue = queue.Queue()
         self._thread = None
         self.token = None
         self.token_expiry = None  # UTC datetime
+        self.last_refresh_was_reauth = False  # True when fallback re-auth was used
 
     def _log(self, msg):
         if self._log_fn:
             self._log_fn(msg)
         else:
             print(msg)
+
+    def _emit_event(self, event):
+        if self._event_fn:
+            self._event_fn(event)
 
     def start(self):
         """
@@ -115,16 +119,30 @@ class AuthSession:
 
     def refresh_token(self):
         """
-        Silently refresh the token by navigating the existing browser page back
-        to the SBAT login URL. Relies on itsme session cookies being preserved.
-        Blocks until a new token is captured or timeout (30s).
-        Returns the new token string, or None if silent refresh failed.
+        Refresh the token. Attempts silent refresh first; if the itsme session
+        has expired, automatically falls back to full re-auth (restores the
+        browser window and waits up to 120s for the user to confirm on their
+        phone). Sets last_refresh_was_reauth=True when the fallback was used.
+        Blocks until a token is captured or both paths time out.
+        Returns the new token string, or None on failure.
         """
         result = {"token": None}
         done = threading.Event()
         self._command_queue.put(("refresh", result, done))
-        done.wait(timeout=35)  # Slightly longer than the 30s internal timeout
+        done.wait(timeout=200)  # silent (~7s fast-fail) + re-auth (120s) + buffer
         return result["token"]
+
+    def _set_window_state(self, context, page, state):
+        """Set the browser window state via CDP. state: 'minimized' | 'normal'."""
+        try:
+            cdp = context.new_cdp_session(page)
+            winfo = cdp.send("Browser.getWindowForTarget")
+            cdp.send("Browser.setWindowBounds", {
+                "windowId": winfo["windowId"],
+                "bounds": {"windowState": state},
+            })
+        except Exception:
+            pass
 
     def close(self):
         """Clean up the browser and stop the Playwright thread."""
@@ -167,6 +185,11 @@ class AuthSession:
                 browser.close()
                 return
 
+            # Minimize the browser window so it doesn't steal focus during
+            # silent refresh navigations (macOS brings Chrome to the front on
+            # page.goto, which buries the Qt GUI).
+            self._set_window_state(context, page, "minimized")
+
             # --- Command loop: process refresh/close requests ---
             while True:
                 try:
@@ -178,22 +201,52 @@ class AuthSession:
                     break
 
                 if cmd == "refresh":
-                    self._log("Attempting silent token refresh...")
-                    new_token = self._wait_for_token(page, timeout=30)
+                    self.last_refresh_was_reauth = False
+                    new_token = self._wait_for_token(
+                        page, timeout=60, skip_token=self.token
+                    )
                     if new_token:
                         self.token = new_token
                         self.token_expiry = _decode_jwt_exp(new_token)
                         self._log("Token refreshed silently.")
                     else:
-                        self._log("Silent refresh failed. Re-authentication required.")
+                        # Silent refresh failed (itsme session expired).
+                        # Restore the browser window and wait for the user to
+                        # confirm itsme on their phone — no app restart needed.
+                        self._log(
+                            "Silent refresh failed. "
+                            "Please confirm itsme on your phone to re-authenticate..."
+                        )
+                        self._emit_event("REAUTH_NEEDED")
+                        self._set_window_state(context, page, "normal")
+                        new_token = self._wait_for_token(page, timeout=120)
+                        if new_token:
+                            self.token = new_token
+                            self.token_expiry = _decode_jwt_exp(new_token)
+                            self.last_refresh_was_reauth = True
+                            self._log("Re-authenticated via itsme. Resuming.")
+                            self._set_window_state(context, page, "minimized")
+                        else:
+                            self._log("Re-authentication timed out.")
                     result["token"] = new_token
                     done.set()
 
             browser.close()
 
-    def _wait_for_token(self, page, timeout):
+    def _wait_for_token(self, page, timeout, skip_token=None):
         """
-        Navigate to the SBAT login URL and wait for a token to be captured.
+        Navigate to the SBAT app and wait for a token to be captured.
+
+        skip_token: if set, ignore any captured token that matches this value.
+                    Used during refresh to avoid re-capturing the expiring token
+                    that the SBAT SPA sends in Authorization headers on page load.
+
+        For silent refresh: clears localStorage so the SPA detects no token and
+        redirects itself to the login route, then checks the privacy policy
+        checkbox and clicks the itsme button. The itsme IDP session cookies
+        are preserved in the browser context, so OIDC completes without phone
+        confirmation and the new token arrives via the callback URL.
+
         Returns the token string or None on timeout.
         """
         captured = {"token": None}
@@ -201,23 +254,55 @@ class AuthSession:
         def on_request(request):
             if captured["token"]:
                 return
-            token = _capture_token_from_request(request, self._log)
-            if token:
+            token = _capture_token_from_request(request)
+            if token and token != skip_token:
+                self._log("Token captured.")
                 captured["token"] = token
 
         page.on("request", on_request)
-        self._log("Opening browser for itsme authentication...")
-        self._log("Please confirm your identity in the itsme app on your phone.")
-        page.goto(SBAT_LOGIN_URL)
 
-        start = time.time()
-        while not captured["token"] and time.time() - start < timeout:
-            try:
-                page.wait_for_timeout(500)
-            except Exception:
-                break
+        try:
+            if skip_token:
+                self._log("Attempting silent token refresh...")
+                # Clear localStorage so the SPA detects no token and redirects to login
+                page.evaluate("localStorage.clear()")
+                page.goto("https://rijbewijs.sbat.be/praktijk/examen/overview")
+                self._log(f"[diag] landed on: {page.url}")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception as e:
+                    self._log(f"[diag] networkidle: {e}")
+                try:
+                    page.click('label:has-text("privacybeleid")', timeout=5000)
+                    self._log("Checked privacy policy checkbox.")
+                    page.click('div.btn', timeout=5000)
+                    self._log("Clicked itsme login button.")
+                except Exception as e:
+                    self._log(f"[diag] Login interaction failed: {e}")
 
-        page.remove_listener("request", on_request)
+                if not captured["token"]:
+                    # Wait a few seconds to see where the itsme redirect lands.
+                    # If still on itsme.be after this, the IDP session expired and
+                    # phone confirmation is required — fail fast instead of waiting 60s.
+                    page.wait_for_timeout(5000)
+                    post_click_url = page.url
+                    self._log(f"[diag] post-click URL: {post_click_url}")
+                    if "itsme.services" in post_click_url:
+                        self._log("itsme session expired. Phone confirmation required — silent refresh not possible.")
+                        return None
+            else:
+                self._log("Opening browser for itsme authentication...")
+                self._log("Please confirm your identity in the itsme app on your phone.")
+                page.goto(SBAT_LOGIN_URL)
+
+            start = time.time()
+            while not captured["token"] and time.time() - start < timeout:
+                try:
+                    page.wait_for_timeout(500)
+                except Exception:
+                    break
+        finally:
+            page.remove_listener("request", on_request)
 
         if not captured["token"]:
             self._log(f"Authentication timed out after {timeout}s.")

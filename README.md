@@ -35,16 +35,17 @@ For users who prefer not to install Python or manage dependencies, pre-compiled 
     * `python3 sbat_gui_pyside.py` (GUI)
 
 ### Authentication
-SBAT uses Belgium's **itsme** app for authentication. When you start the application:
-1. A browser window opens to the SBAT login page.
-2. Complete the itsme verification on your phone.
+SBAT uses Belgium's **itsme** app for authentication. The GUI handles this automatically:
+1. A browser window opens to the SBAT login page as soon as the app starts.
+2. Complete the itsme verification on your phone (once).
 3. The application captures your session token automatically and begins checking for slots.
+4. The token is silently refreshed ~5 minutes before it expires. If the itsme session has also expired you will receive an OS notification (Notification Center on macOS) and the browser window will reappear — confirm on your phone again and the app resumes without restarting.
 
 Alternatively, you can manually provide a Bearer token:
 * CLI: `python3 sbat.py --token YOUR_BEARER_TOKEN`
 * GUI: Use the "Paste Token" field
 
-Tokens are kept in memory only (~1 hour TTL) and are not saved to disk.
+Tokens are kept in memory only (fixed expiry read from the JWT, typically ~1 hour) and are not saved to disk.
 
 ### Disclaimer
 * This script relies on an unofficial API endpoint (`api-rijbewijs.sbat.be`) used by the SBAT booking system. This API may change without notice, which could break the script.
@@ -87,16 +88,17 @@ Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn
     * `python3 sbat_gui_pyside.py` (GUI)
 
 ### Authenticatie
-SBAT gebruikt de Belgische **itsme**-app voor authenticatie. Wanneer u de applicatie start:
-1. Er opent een browservenster naar de SBAT-loginpagina.
-2. Bevestig uw identiteit via de itsme-app op uw telefoon.
+SBAT gebruikt de Belgische **itsme**-app voor authenticatie. De GUI verwerkt dit automatisch:
+1. Een browservenster opent naar de SBAT-loginpagina zodra de app start.
+2. Bevestig uw identiteit via de itsme-app op uw telefoon (eenmalig).
 3. De applicatie vangt uw sessietoken automatisch op en begint met het controleren van beschikbare slots.
+4. Het token wordt automatisch vernieuwd ~5 minuten voor het vervalt. Als de itsme-sessie ook verlopen is, ontvangt u een OS-melding (Berichtencentrum op macOS) en verschijnt het browservenster opnieuw — bevestig opnieuw op uw telefoon en de app hervat zonder opnieuw op te starten.
 
 U kunt ook handmatig een Bearer-token invoeren:
 * CLI: `python3 sbat.py --token UW_BEARER_TOKEN`
 * GUI: Gebruik het "Paste Token"-veld
 
-Tokens worden alleen in het geheugen bewaard (~1 uur geldig) en worden niet op schijf opgeslagen.
+Tokens worden alleen in het geheugen bewaard (vaste vervaldatum uit de JWT, doorgaans ~1 uur) en worden niet op schijf opgeslagen.
 
 ### Disclaimer
 * Dit script maakt gebruik van een onofficieel API-eindpunt (`api-rijbewijs.sbat.be`) dat wordt gebruikt door het SBAT-boekingssysteem. Deze API kan zonder kennisgeving wijzigen, wat het script onbruikbaar kan maken.
