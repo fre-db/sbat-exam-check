@@ -9,13 +9,13 @@ This Python script periodically checks the SBAT practical driving exam booking s
 For users who prefer not to install Python or manage dependencies, pre-compiled versions for macOS and Windows are available.
 
 1.  **Download:** Go to the [**Releases**](https://github.com/fre-db/sbat-exam-check/releases) page of this GitHub repository.
-    * **Windows:** Download the `sbat-windows.exe` file.
-    * **macOS:** Download the `sbat-mac` file.
+    * **Windows:** Download the `sbat-windows.zip` file.
+    * **macOS:** Download `sbat-mac-arm64.zip` (Apple Silicon — M1/M2/M3) or `sbat-mac-intel.zip` (Intel).
 2.  **Run:**
     * **Windows:** Double-click the `.exe` file. You might see a Windows SmartScreen warning because the application isn't signed. Click "More info" and then "Run anyway".
     * **macOS:** Unzip and double-click the app. Because it isn't signed with an Apple Developer certificate, macOS will block it the first time. To allow it:
         1. Open **System Settings → Privacy & Security**
-        2. Scroll down to the Security section — you'll see a message about `sbat_checker_qt` being blocked
+        2. Scroll down to the Security section — you'll see a message about `sbat_checker` being blocked
         3. Click **"Open Anyway"**, then confirm in the dialog that appears
         4. You only need to do this once.
 3.  **Operation:** The application will run in the background (likely opening a terminal/console window on Windows, or just running without a visible window after the initial permission on macOS). It will display system notifications when new exam slots are found. To stop it, close the terminal/console window or use the Activity Monitor (macOS) / Task Manager (Windows) to end the process.
@@ -62,13 +62,13 @@ Dit Python-script controleert automatisch het SBAT-boekingssysteem (`api-rijbewi
 Voor gebruikers die liever geen Python installeren of dependencies beheren, zijn voorgecompileerde versies voor macOS en Windows beschikbaar.
 
 1.  **Downloaden:** Ga naar de [**Releases**](https://github.com/fre-db/sbat-exam-check/releases) pagina van deze GitHub repository.
-    * **Windows:** Download het `sbat-windows.exe`-bestand
-    * **macOS:** Download het `sbat-mac` bestand. 
+    * **Windows:** Download het `sbat-windows.zip`-bestand.
+    * **macOS:** Download `sbat-mac-arm64.zip` (Apple Silicon — M1/M2/M3) of `sbat-mac-intel.zip` (Intel).
 2.  **Uitvoeren:**
     * **Windows:** Dubbelklik op het `.exe`-bestand. U krijgt mogelijk een Windows SmartScreen-waarschuwing omdat de applicatie niet is ondertekend. Klik op "Meer informatie" en vervolgens op "Toch uitvoeren".
     * **macOS:** Pak de zip uit en dubbelklik op de app. Omdat de app niet is ondertekend met een Apple Developer-certificaat, zal macOS deze de eerste keer blokkeren. Om dit op te lossen:
         1. Open **Systeeminstellingen → Privacy en beveiliging**
-        2. Scrol naar het gedeelte Beveiliging — u ziet een melding dat `sbat_checker_qt` is geblokkeerd
+        2. Scrol naar het gedeelte Beveiliging — u ziet een melding dat `sbat_checker` is geblokkeerd
         3. Klik op **"Toch openen"** en bevestig in het dialoogvenster
         4. Dit hoeft u maar één keer te doen.
 3.  **Werking:** De applicatie draait op de achtergrond (opent waarschijnlijk een terminal/console-venster op Windows, of draait zonder zichtbaar venster na de eerste toestemming op macOS). Het toont systeemmeldingen wanneer nieuwe examen-slots worden gevonden. Om te stoppen, sluit u het terminal/console-venster of gebruikt u de Activiteitenweergave (macOS) / Taakbeheer (Windows) om het proces te beëindigen.

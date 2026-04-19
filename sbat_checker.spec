@@ -51,7 +51,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='sbat_checker_qt',
+    name='sbat_checker',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -70,14 +70,14 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='sbat_checker_qt',
+    name='sbat_checker',
 )
 
 # macOS .app bundle
 if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
-        name='sbat_checker_qt.app',
+        name='sbat_checker.app',
         icon=None,
         bundle_identifier=None,
     )

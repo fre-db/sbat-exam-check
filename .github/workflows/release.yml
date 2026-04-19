@@ -13,9 +13,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
-            artifact: sbat-mac
-            zip: sbat-mac.zip
+          - os: macos-13
+            artifact: sbat-mac-intel
+            zip: sbat-mac-intel.zip
+          - os: macos-14
+            artifact: sbat-mac-arm64
+            zip: sbat-mac-arm64.zip
           - os: windows-latest
             artifact: sbat-windows
             zip: sbat-windows.zip
@@ -34,15 +37,15 @@ jobs:
           pip install pyinstaller
 
       - name: Build with PyInstaller
-        run: pyinstaller sbat_checker_qt.spec --noconfirm
+        run: pyinstaller sbat_checker.spec --noconfirm
 
       - name: Zip artifact (macOS)
         if: runner.os == 'macOS'
-        run: cd dist && zip -r -9 ${{ matrix.zip }} sbat_checker_qt.app/
+        run: cd dist && zip -r -9 ${{ matrix.zip }} sbat_checker.app/
 
       - name: Zip artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist\sbat_checker_qt\* -DestinationPath dist\${{ matrix.zip }}
+        run: Compress-Archive -Path dist\sbat_checker\* -DestinationPath dist\${{ matrix.zip }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -61,6 +64,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/sbat-mac/sbat-mac.zip
+            artifacts/sbat-mac-intel/sbat-mac-intel.zip
+            artifacts/sbat-mac-arm64/sbat-mac-arm64.zip
             artifacts/sbat-windows/sbat-windows.zip
           generate_release_notes: true

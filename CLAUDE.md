@@ -9,7 +9,7 @@ Monitors Belgian SBAT driving exam booking system for available Type B (car) pra
 - **GUI:** PySide6 (cross-platform)
 - **Auth:** Playwright (browser-based itsme OIDC authentication)
 - **Timezone:** pytz (Europe/Brussels)
-- **Packaging:** PyInstaller (sbat_checker_qt.spec)
+- **Packaging:** PyInstaller (sbat_checker.spec)
 
 ## Architecture
 ```
